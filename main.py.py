@@ -2,7 +2,7 @@ import time
 import csv
 
 # ******************** 配置参数 ********************
-# 可选 'ESI+' 或 'ESI-'
+# 可选 'ESI+' or 'ESI-' or 'EI+' or 'EI-'
 MS_MODE = 'ESI+'
 # 质荷比
 M2Z = 100.0000
@@ -21,8 +21,10 @@ ATOMIC_WEIGHTS = {
 }
 
 ION_WEIGHTS = {
+    'e+': 0.0000, 'e-': 0.0000, 
     'Na+': 22.989769, 'K+': 38.963707, 'H3O+': 19.01839, 'NH4+': 18.034374,
-    'H+': 1.007825, 'H-': -1.007825, 'Cl-': 34.968853, 
+    'H+': 1.007825, 'H-': -1.007825, 'Cl-': 34.968853, 'HCOO-': 44.997655,
+    'CH3COO-': 59.013305, 
 }
 
 # 加合离子配置
@@ -36,7 +38,15 @@ ADDUCTS = {
     },
     'ESI-': {
         'H-': ION_WEIGHTS['H-'],
-        'Cl-': ION_WEIGHTS['Cl-']
+        'Cl-': ION_WEIGHTS['Cl-'],
+        'HCOO-': ION_WEIGHTS['HCOO-'],
+        'CH3COO-': ION_WEIGHTS['CH3COO-'],
+    },
+    'EI+': {
+        'e+': ION_WEIGHTS['e+'],
+    },
+    'EI-': {
+        'e-': ION_WEIGHTS['e-'],
     },
 }
 
@@ -173,11 +183,14 @@ def data_analysis(ms_mode, m2z, error, charge) -> dict:
             results[mode] = find_chem_formula(mw=mw, error=error)
         return results
     else:
-        print('Wrong MS_MODE!!!')
+        print('MS_MODE参数错误!!!')
         exit()
 
-def output_data(ms_mode, m2z, error, charge):
+def main(ms_mode, m2z, error, charge):
     """"""
+
+    start_time = time.time()
+    i = 0
 
     data = data_analysis(ms_mode, m2z, error, charge)
     
@@ -188,6 +201,7 @@ def output_data(ms_mode, m2z, error, charge):
             writer.writerow(['C', 'H', 'O', 'N', 'S', 'P', 'Si', 'B', 'Se', 'F', 'Cl', 'Br', 'I', 'ion', 'dbr', 'p_mw'])
             for key, values in data.items():
                 for item in values:
+                    i += 1
                     mw_ion = item.p_mw + charge * ADDUCTS[ms_mode][key]
                     writer.writerow([item.elements['C'],
                                      item.elements['H'],
@@ -204,10 +218,13 @@ def output_data(ms_mode, m2z, error, charge):
                                      item.elements['I'],
                                      key,
                                      item.dbr,
-                                     format(mw_ion, '.3f'),
+                                     format(mw_ion, '.4f'),
                                     ])
+        print(f"生成完成！耗时 {time.time()-start_time:.2f} 秒")
+        print(f"共找到 {i} 个可能分子式")
+
     else:
-        print('None Result!!!')
+        print('没有找到可能分子式!!!')
         exit()
 
 if __name__ == '__main__':
@@ -216,4 +233,4 @@ if __name__ == '__main__':
     # for item in find_chem_formula(100.00, 0.001):
     #     print(f'{item.C_num}\t{item.Si_num}\t{item.B_num}\t{item.N_num}\t{item.P_num}\t{item.O_num}\t{item.S_num}\t{item.Se_num}\t{item.F_num}\t{item.Cl_num}\t{item.Br_num}\t{item.I_num}\t{item.H_num}\t{item.dbr}\t{item.p_mw}')
 
-    output_data(ms_mode=MS_MODE, m2z=M2Z, error=ERROR_PERCENT, charge=CHARGE)
+    main(ms_mode=MS_MODE, m2z=M2Z, error=ERROR_PERCENT, charge=CHARGE)
