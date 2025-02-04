@@ -5,11 +5,18 @@ import csv
 # 可选 'ESI+' or 'ESI-' or 'EI+' or 'EI-'
 MS_MODE = 'ESI+'
 # 质荷比
-M2Z = 100.0000
+M2Z = 1000.0000
 # 误差范围 (%)
 ERROR_PERCENT = 0.1
 # 电荷数
 CHARGE = 1
+# 元素搜索范围 可选'all' 'CHONSPCl'等等 如果选择all 质荷比不建议大于300(一般电脑跑不动这么大范围的搜索)
+ELEMENTS = 'CHONSP'
+'''
+案例(时效性):
+质荷比300 元素搜索范围all 需要超过10秒
+质荷比1000 元素搜索范围CHONSP 需要超过40秒
+'''
 # ******************** 参数结束 ********************
 
 # 原子量数据 (精确质量)
@@ -105,12 +112,8 @@ def calculate_molecular_weight(ms_mode, m2z, charge) -> dict:
 
     return mw_dict
 
-def find_chem_formula(mw: float, error: float) -> list:
-    '''根据目标分子量和误差范围，找出所有满足条件的化学式组合'''
-    
-    mw_error = mw * error
-    mw_min = mw - mw_error
-    mw_max = mw + mw_error
+def search_mode() -> dict:
+    """使用ELEMENTS数据给出需要参与搜寻的元素字典"""
 
     # 按原子量降序排列的元素列表（不包含氢）
     elements = [
@@ -127,6 +130,27 @@ def find_chem_formula(mw: float, error: float) -> list:
         ('C', ATOMIC_WEIGHTS['C']),
         ('B', ATOMIC_WEIGHTS['B']),
     ]
+
+    if ELEMENTS.lower() == 'all':
+        return elements
+
+    elements_need = []
+    for item in elements:
+        if item[0] in ELEMENTS:
+            elements_need.append(item)
+    
+    return elements_need
+
+
+def find_chem_formula(mw: float, error: float) -> list:
+    '''根据目标分子量和误差范围，找出所有满足条件的化学式组合'''
+    
+    mw_error = mw * error
+    mw_min = mw - mw_error
+    mw_max = mw + mw_error
+
+    # 按原子量降序排列的元素列表（不包含氢）
+    elements = search_mode()
     H_weight = ATOMIC_WEIGHTS['H']
 
     chem_list = []
