@@ -1,17 +1,18 @@
 import time
 import csv
+import re
 
 # ******************** 配置参数 ********************
 # 可选 'ESI+' or 'ESI-' or 'EI+' or 'EI-'
 MS_MODE = 'ESI+'
 # 质荷比
-M2Z = 1000.0000
+M2Z = 100
 # 误差范围 (%)
 ERROR_PERCENT = 0.1
 # 电荷数
 CHARGE = 1
-# 元素搜索范围 可选'all' 'CHONSPCl'等等 如果选择all 质荷比不建议大于300(一般电脑跑不动这么大范围的搜索)
-ELEMENTS = 'CHONSP'
+# 元素搜索范围 可选'all' 'CHONSPCl'等等 如果选择all 质荷比不建议大于300(一般电脑跑不动更大范围的搜索)
+ELEMENTS = 'all'
 '''
 案例(时效性):
 质荷比300 元素搜索范围all 需要超过10秒
@@ -134,9 +135,18 @@ def search_mode() -> dict:
     if ELEMENTS.lower() == 'all':
         return elements
 
+    # 删除所有非字母字符
+    filtered_string = re.sub(r'[^a-zA-Z]', '', ELEMENTS)
+    
+    # 使用正则表达式进行分割
+    # 规则1: 两个相邻字符均为大写英文(分割)
+    # 规则2: 前一个为小写英文，后一个为大写英文(分割)
+    # 规则3: 连续的大写字母和小写字母组合(如"Cl")不分割
+    split_list = re.findall(r'[A-Z]?[a-z]+|[A-Z]', filtered_string)
+
     elements_need = []
     for item in elements:
-        if item[0] in ELEMENTS:
+        if item[0] in split_list:
             elements_need.append(item)
     
     return elements_need
@@ -221,7 +231,7 @@ def main(ms_mode, m2z, error, charge):
     if data:
         with open(f'ms_data_{int(time.time())}.csv', 'w', newline='') as csvfile:
             writer = csv.writer(csvfile)
-            writer.writerow([f'ms_mode: {ms_mode}', f'm/z: {m2z}', f'error: {error}', f'z: {charge}'])
+            writer.writerow([f'ms_mode: {ms_mode}', f'm/z: {m2z}', f'error: {error}', f'z: {charge}', f'ELEMENTS: {ELEMENTS}'])
             writer.writerow(['C', 'H', 'O', 'N', 'S', 'P', 'Si', 'B', 'Se', 'F', 'Cl', 'Br', 'I', 'ion', 'dbr', 'p_mw'])
             for key, values in data.items():
                 for item in values:
