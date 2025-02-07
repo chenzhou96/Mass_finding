@@ -267,4 +267,4 @@ if __name__ == '__main__':
     # for item in find_chem_formula(100.00, 0.001):
     #     print(f'{item.C_num}\t{item.Si_num}\t{item.B_num}\t{item.N_num}\t{item.P_num}\t{item.O_num}\t{item.S_num}\t{item.Se_num}\t{item.F_num}\t{item.Cl_num}\t{item.Br_num}\t{item.I_num}\t{item.H_num}\t{item.dbr}\t{item.p_mw}')
 
-    main(ms_mode=MS_MODE, m2z=M2Z, error=ERROR_PERCENT, charge=CHARGE)
+    main(ms_mode=MS_MODE, m2z=M2Z, error=(ERROR_PERCENT / 100), charge=CHARGE)
