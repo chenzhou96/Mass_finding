@@ -1,2 +1,5 @@
-/back_end/*cache*/
-/front_end/*cache*/
+# 忽略所有名为 *cache* 的文件夹，无论嵌套层级
+**/*cache*/
+
+# 忽略所有log文件
+**/*.log
