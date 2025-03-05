@@ -5,3 +5,5 @@ from .base_page import BasePage
 class FormulaSearchPage(BasePage):
     def __init__(self, parent, event_bus):
         super().__init__(parent, event_bus, title="Formula Search")
+        label = tk.Label(self, text="这是Formula Search页面")
+        label.pack(fill=tk.BOTH, expand=True)
