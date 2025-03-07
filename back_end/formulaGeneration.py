@@ -4,6 +4,8 @@ import logging
 import concurrent.futures
 from concurrent.futures import ProcessPoolExecutor
 from public import ExporterFactory
+from pathlib import Path
+from public import ConfigManager
 
 # ---------------------------- 类定义 ----------------------------
 class ChemicalFormula:
@@ -130,9 +132,16 @@ def backtrack_search(target_mw: float, tolerance: float, elements: list, atomic_
     dfs(0, target_mw, [])
     return results
 
-# 移除 ResultHandler 类的相关代码
-def start_analysis(input_data, config_manager):
+# ---------------------------- 入口函数 ----------------------------
+def start_analysis(input_data: dict) -> dict:
     try:
+        script_dir = Path(__file__).resolve().parent
+        config_path = script_dir.joinpath('config.json')
+
+        # 加载配置
+        config_manager = ConfigManager(config_path)
+
+
         ms_mode = input_data["ms_mode"]
         m2z = float(input_data["m2z"])
         error = float(input_data["error_pct"]) / 100
@@ -216,9 +225,9 @@ def start_analysis(input_data, config_manager):
 
             try:
                 csv_exporter.export(results)
-                daata_to_save = json_exporter.export(results)
+                data_to_save = json_exporter.export(results)
                 logging.info(f"分析完成！耗时 {time.time() - start_time:.2f}秒")
-                return daata_to_save
+                return data_to_save
             except Exception as e:
                 logging.error(f"结果导出失败: {e}")
         else:
@@ -230,17 +239,8 @@ def start_analysis(input_data, config_manager):
 # ---------------------------- 测试代码 ----------------------------
 if __name__ == '__main__':
 
-    from pathlib import Path
-    from public import ConfigManager
-
     # 配置日志记录
     logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
-
-    script_dir = Path(__file__).resolve().parent
-    config_path = script_dir.joinpath('config.json')
-
-    # 加载配置
-    config_manager = ConfigManager(config_path)
 
     # 测试实例 1
     input_data_1 = {
@@ -329,16 +329,16 @@ if __name__ == '__main__':
     from time import sleep
     logging.info(f"开始测试... from {__file__}")
     logging.info("测试实例 1:")
-    start_analysis(input_data_1, config_manager)
+    start_analysis(input_data_1)
     sleep(1)
     logging.info("测试实例 2:")
-    start_analysis(input_data_2, config_manager)
+    start_analysis(input_data_2)
     sleep(1)
     logging.info("测试实例 3:")
-    start_analysis(input_data_3, config_manager)
+    start_analysis(input_data_3)
     sleep(1)
     logging.info("测试实例 4:")
-    start_analysis(input_data_4, config_manager)
+    start_analysis(input_data_4)
     sleep(1)
     logging.info("测试实例 5:")
-    start_analysis(input_data_5, config_manager)
+    start_analysis(input_data_5)
