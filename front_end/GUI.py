@@ -5,8 +5,8 @@ from .core.event import EventBus
 from .config import AppConfig
 from .core.page_factory import PageFactory
 from .components.status_bar import StatusBar
+from .utils.widget_factory import WidgetFactory
 import logging
-
 
 class APP(tk.Tk):
     def __init__(self):
@@ -28,9 +28,10 @@ class APP(tk.Tk):
         # 3. 初始化核心组件（先初始化事件总线）
         self.event_bus = EventBus()
         self.page_factory = PageFactory(self.left_frame, self.event_bus)
+        self.widget_factory = WidgetFactory()  # 创建 WidgetFactory 实例
 
         # 4. 创建导航栏
-        self.nav_bar = NavigationBar(self, self.page_factory)
+        self.nav_bar = NavigationBar(self, self.page_factory, self.widget_factory)
         self.nav_bar.pack(side=tk.TOP, fill=tk.X, padx=5, pady=(5, 10))
 
         # 5. 布局容器定位
@@ -40,14 +41,11 @@ class APP(tk.Tk):
         self.right_frame.pack_propagate(0)  # 禁止自动调整大小
 
         # 6. 初始化日志显示组件（移到事件总线之后）
-        self.log_text = tk.Text(
-            self.right_frame,
-            bg=AppConfig.COLOR_PRIMARY,
-            fg=AppConfig.COLOR_TEXT,
-            font=(AppConfig.DEFAULT_FONT, 10),
-            wrap=tk.CHAR
-        )
+        scrollable_text = self.widget_factory.create_scrollable_text(self.right_frame)
+        self.log_text = scrollable_text["text"]
         self.logger = Logger(self.event_bus, text_widget=self.log_text)
+        scrollable_text["scrollbar"].pack(side=tk.RIGHT, fill=tk.Y)
+        self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         # 7. 创建状态栏
         self.status_bar = StatusBar(self.left_frame, event_bus=self.event_bus)
@@ -58,13 +56,7 @@ class APP(tk.Tk):
         )
         self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
 
-        # 8. 配置日志文本框和滚动条
-        self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar = tk.Scrollbar(self.right_frame, command=self.log_text.yview)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        self.log_text.config(yscrollcommand=scrollbar.set)
-
-        # 9. 显示初始页面
+        # 8. 显示初始页面
         initial_page = self.page_factory.get_page('BlankPage')
         self.show_page(initial_page)
         logging.info("应用初始化完成")
@@ -86,7 +78,6 @@ class APP(tk.Tk):
 
         # 强制刷新界面
         self.update_idletasks()
-
 
 if __name__ == '__main__':
     app = APP()

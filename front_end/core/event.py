@@ -19,7 +19,10 @@ class EventBus:
     def publish(self, event):
         with self._lock:
             for listener in self._listeners[event.event_type]:
-                listener(event)
+                try:
+                    listener(event)
+                except Exception as e:
+                    logging.error(f"事件 {event.event_type} 处理失败: {e}")
 
 class EventRegistry:
     def __init__(self, event_bus):

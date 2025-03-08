@@ -3,12 +3,11 @@ from ..config import AppConfig, EVENT_TYPES
 from ..core.event import Event
 import logging
 
-
 class NavigationBar(tk.Frame):
-    def __init__(self, parent, page_factory):
-        # 设置导航栏背景色和边框
+    def __init__(self, parent, page_factory, widget_factory):
         super().__init__(parent, bg=AppConfig.NAV_BAR_COLOR, bd=2, relief=tk.RAISED)
         self.page_factory = page_factory
+        self.widget_factory = widget_factory
         self.active_button = None  # 当前活动按钮跟踪
         self.buttons = {
             'FormulaGenerationPage': self._create_nav_button('分子式生成', 'FormulaGenerationPage'),
@@ -26,17 +25,11 @@ class NavigationBar(tk.Frame):
             button.pack(side=tk.LEFT, padx=5, pady=5)
 
     def _create_nav_button(self, text, page_name, is_disabled=False):
-        button_style = AppConfig.BUTTON_STYLE.copy()
-
-        if is_disabled:
-            button_style.update(AppConfig.DISABLED_BUTTON_STYLE)
-            button_style['state'] = tk.DISABLED
-
-        return tk.Button(
+        return self.widget_factory.create_button(
             self,
             text=text,
-            **button_style,
-            command=lambda p=page_name: self._switch_page(p) if not is_disabled else None
+            command=lambda p=page_name: self._switch_page(p) if not is_disabled else None,
+            is_disabled=is_disabled
         )
 
     def _switch_page(self, page_name):
@@ -51,7 +44,7 @@ class NavigationBar(tk.Frame):
                 
                 # 2. 重置按钮样式
                 for btn in self.buttons.values():
-                    if btn.cget('state') != tk.DISABLED:
+                    if btn.cget('state') == tk.NORMAL:
                         btn.config(**AppConfig.BUTTON_STYLE)
                 
                 # 3. 设置当前按钮样式

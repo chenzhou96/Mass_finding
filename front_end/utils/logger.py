@@ -2,11 +2,13 @@ import logging
 import tkinter as tk
 from ..config import AppConfig
 from ..core.event import EventLogHandler
+from ..utils.widget_factory import WidgetFactory
 
 class Logger:
     def __init__(self, event_bus, text_widget=None):
         self.text_widget = text_widget
         self.event_bus = event_bus
+        self.widget_factory = WidgetFactory()  # 创建 WidgetFactory 实例
         self._configure_logging()
 
         # 订阅日志事件
@@ -38,9 +40,7 @@ class Logger:
     def log_to_ui(self, event):
         """在主线程安全地更新日志Text组件"""
         if self.text_widget and event.data:
-            self.text_widget.after(0, 
-                lambda msg=event.data: self._append_log(msg)
-            )
+            self.text_widget.after(0, lambda msg=event.data: self._append_log(msg))
 
     def _append_log(self, message):
         self.text_widget.insert(tk.END, f"{message}\n")
