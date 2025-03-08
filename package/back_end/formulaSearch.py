@@ -2,7 +2,7 @@ import json
 import time
 import logging
 import requests
-from public import ExporterFactory
+from ..back_end.public import ExporterFactory
 from enum import Enum
 
 class Status(Enum):

@@ -35,9 +35,9 @@ class APP(tk.Tk):
         self.nav_bar.pack(side=tk.TOP, fill=tk.X, padx=5, pady=(5, 10))
 
         # 5. 布局容器定位
-        self.left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(10, 5), pady=5)
         self.right_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=(5, 10), pady=5)
         self.right_frame.pack_propagate(0)  # 禁止自动调整大小
+        self.left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(10, 5), pady=5)
 
         # 6. 初始化日志显示组件（移到事件总线之后）
         scrollable_text = self.widget_factory.create_scrollable_text(self.right_frame)

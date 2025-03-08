@@ -3,9 +3,9 @@ import time
 import logging
 import concurrent.futures
 from concurrent.futures import ProcessPoolExecutor
-from public import ExporterFactory
+from ..back_end.public import ExporterFactory
 from pathlib import Path
-from public import ConfigManager
+from ..back_end.public import ConfigManager
 
 # ---------------------------- 类定义 ----------------------------
 class ChemicalFormula:

@@ -119,8 +119,8 @@ class AppConfig:
         }
 
     class Padding:
-        X = 1
-        Y = 1
+        X = 2
+        Y = 2
 
 EVENT_TYPES = {
     'PAGE_SWITCH': 'page_switch',
