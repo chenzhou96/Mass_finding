@@ -1,6 +1,8 @@
 import tkinter as tk
 
 
+DEFUALT_FONT = '微软雅黑'
+
 class AppConfig:
     
     class MainWindow:
@@ -9,15 +11,33 @@ class AppConfig:
         WINDOW_SIZE = "1280x800"
         BG_COLOR = "#FFFFFF"
 
+    class BaseElement:
+        BUTTON = {
+            'width': 6,
+            'height': 1,
+            'bd': 0,
+            'bg': '#E3E3E3',
+            'fg': '#404040',
+            'font': (DEFUALT_FONT, 8),
+            'relief': tk.FLAT,
+            'borderwidth': 1,
+        }
+
+        TEXT = {    
+            'bg': '#E3E3E3',
+            'fg': '#404040',
+            'font': (DEFUALT_FONT, 8),    
+        }
+
     class LogWindow:
         FRAME = {
             'width': 200,
         }
 
-        LABEL = {
+        TEXT = {
             'bg': "#FAFAFA",
             'fg': '#000000',
-            'font': ('微软雅黑', 8),
+            'font': (DEFUALT_FONT, 8),
         }
 
         LOG_FORMAT = '%(asctime)s - [%(levelname)s] %(message)s'
@@ -36,7 +56,7 @@ class AppConfig:
             'bd': 0,
             'bg': '#E3E3E3',
             'fg': '#404040',
-            'font': ('微软雅黑', 10, 'bold'),
+            'font': (DEFUALT_FONT, 10, 'bold'),
             'relief': tk.FLAT,
             'borderwidth': 1,
             'padx': 8,
@@ -64,10 +84,10 @@ class AppConfig:
             'relief': tk.GROOVE
         }
 
-        LABEL = {
+        TEXT = {
             'bg': '#EEEEEE',
             'fg': '#00008B',
-            'font': ('微软雅黑', 8),
+            'font': (DEFUALT_FONT, 8),
         }
 
     class PageWindow:
@@ -81,7 +101,7 @@ class AppConfig:
             'bd': 0,
             'bg': '#E3E3E3',
             'fg': '#404040',
-            'font': ('微软雅黑', 8),
+            'font': (DEFUALT_FONT, 8),
             'relief': tk.FLAT,
             'borderwidth': 1,
         }
@@ -92,12 +112,15 @@ class AppConfig:
             'relief': tk.FLAT
         }
 
-        LABEL = {
+        TEXT = {
             'bg': '#E3E3E3',
             'fg': '#404040',
-            'font': ('微软雅黑', 8),
+            'font': (DEFUALT_FONT, 8),
         }
 
+    class Padding:
+        X = 1
+        Y = 1
 
 EVENT_TYPES = {
     'PAGE_SWITCH': 'page_switch',

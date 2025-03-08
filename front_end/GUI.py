@@ -62,12 +62,18 @@ class APP(tk.Tk):
         
         page.update_idletasks()  # 强制更新布局
 
-        # 隐藏旧页面（如果存在）
-        if self.current_page is not None and self.current_page.winfo_ismapped():
-            self.current_page.pack_forget()
+        # 隐藏旧页面（若存在）
+        if self.current_page:
+            self.current_page.pack_forget()  # 仅隐藏不销毁
         
         # 显示新页面
         page.pack(fill=tk.BOTH, expand=True)
+
+        # 显示新页面（固定在left_frame内）
+        page.pack(fill=tk.BOTH, expand=True, 
+                padx=AppConfig.Padding.X,  # 统一间距配置
+                pady=AppConfig.Padding.Y)
+
         self.current_page = page  # 更新当前页面状态
 
         # 强制刷新界面

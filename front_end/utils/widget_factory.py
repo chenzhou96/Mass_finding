@@ -3,12 +3,14 @@ import tkinter as tk
 
 class WidgetFactory:
     def __init__(self):
-        self.button_style = AppConfig.PageWindow.BUTTON
-        self.label_style = AppConfig.PageWindow.LABEL
+        self.button_style = AppConfig.BaseElement.BUTTON
+        self.label_style = AppConfig.BaseElement.TEXT
 
-    def create_button(self, parent, text, command=None, **style):
+    def create_button(self, parent, text, command=None, **kwargs):
         """创建标准按钮"""
-        return tk.Button(parent, text=text, command=command, **style)
+        button_style = self.button_style.copy()
+        button_style.update(kwargs)
+        return tk.Button(parent, text=text, command=command, **button_style)
 
     def create_label(self, parent, text, **kwargs):
         """创建标准标签"""
@@ -21,7 +23,7 @@ class WidgetFactory:
         text_widget = tk.Text(
             parent,
             wrap=tk.CHAR,
-            **AppConfig.LogWindow.LABEL
+            **AppConfig.LogWindow.TEXT
         )
         scrollbar = tk.Scrollbar(parent, command=text_widget.yview)
         text_widget.config(yscrollcommand=scrollbar.set)
@@ -35,5 +37,5 @@ class WidgetFactory:
         return self.create_label(
             parent,
             text,
-            **AppConfig.StatusBar.LABEL
+            **AppConfig.StatusBar.TEXT
         )
