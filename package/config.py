@@ -7,7 +7,7 @@ class AppConfig:
     
     class MainWindow:
         TITLE = "质谱数据分析工具 V3.0 - designed by zc"
-        ICON = "./front_end/icon.ico"
+        ICON = "./package/icon.ico"
         WINDOW_SIZE = "1280x800"
         BG_COLOR = "#FFFFFF"
 

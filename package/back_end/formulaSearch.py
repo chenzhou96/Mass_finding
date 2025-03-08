@@ -129,11 +129,10 @@ if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
     # 一些示例化学式
-    formula_list = ["C6H12", "C6H8O", "C6H14O2"]
+    formula_list = ["C6H12", "C6H8O2", "C6H14O2"]
 
     # 示例 web_name
     web_name = "PubChem"
 
     # 调用 start_search 函数
     results = start_search(formula_list, web_name)
-    print(results)

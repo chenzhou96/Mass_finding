@@ -1,4 +1,4 @@
-from front_end.GUI import APP
+from package.GUI import APP
 
 if __name__ == "__main__":
     app = APP()
