@@ -15,15 +15,15 @@ class APP(tk.Tk):
         
         # 1. 初始化主窗口
         super().__init__()
-        self.title("质谱数据分析工具 - designed by zc")
-        self.iconbitmap("./front_end/icon.ico")
-        self.geometry(AppConfig.WINDOW_SIZE)
+        self.title(AppConfig.MainWindow.TITLE)
+        self.iconbitmap(AppConfig.MainWindow.ICON)
+        self.geometry(AppConfig.MainWindow.WINDOW_SIZE)
 
-        self.configure(bg=AppConfig.PRIMARY_BG)
+        self.configure(bg=AppConfig.MainWindow.BG_COLOR)
 
         # 2. 创建布局容器
-        self.left_frame = tk.Frame(self, bg=AppConfig.PRIMARY_BG)  # 左侧主内容区域
-        self.right_frame = tk.Frame(self, width=AppConfig.LOG_TEXT_WIDTH)  # 右侧日志区域
+        self.left_frame = tk.Frame(self, **AppConfig.PageWindow.FRAME)  # 左侧主内容区域
+        self.right_frame = tk.Frame(self, **AppConfig.LogWindow.FRAME)  # 右侧日志区域
 
         # 3. 初始化核心组件（先初始化事件总线）
         self.event_bus = EventBus()
@@ -37,7 +37,6 @@ class APP(tk.Tk):
         # 5. 布局容器定位
         self.left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(10, 5), pady=5)
         self.right_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=(5, 10), pady=5)
-        self.right_frame.config(width=AppConfig.LOG_TEXT_WIDTH)
         self.right_frame.pack_propagate(0)  # 禁止自动调整大小
 
         # 6. 初始化日志显示组件（移到事件总线之后）
@@ -49,11 +48,6 @@ class APP(tk.Tk):
 
         # 7. 创建状态栏
         self.status_bar = StatusBar(self.left_frame, event_bus=self.event_bus)
-        self.status_bar.config(
-            relief=tk.GROOVE, 
-            bd=2, 
-            bg=AppConfig.STATUS_BG_COLOR
-        )
         self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
 
         # 8. 显示初始页面

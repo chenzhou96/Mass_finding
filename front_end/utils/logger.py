@@ -25,7 +25,7 @@ class Logger:
             encoding='utf-8',
             delay=False
         )
-        file_handler.setFormatter(logging.Formatter(AppConfig.LOG_FORMAT))
+        file_handler.setFormatter(logging.Formatter(AppConfig.LogWindow.LOG_FORMAT))
 
         # 配置 root logger
         root_logger = logging.getLogger()
