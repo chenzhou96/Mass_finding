@@ -1,10 +1,13 @@
 import tkinter as tk
-from ..config import AppConfig
+from ..config import AppConfig, EVENT_TYPES
+from ..core.event import Event
+import logging
 
 
 class NavigationBar(tk.Frame):
     def __init__(self, parent, page_factory):
-        super().__init__(parent)
+        # 设置导航栏背景色和边框
+        super().__init__(parent, bg=AppConfig.NAV_BAR_COLOR, bd=2, relief=tk.RAISED)
         self.page_factory = page_factory
         self.active_button = None  # 当前活动按钮跟踪
         self.buttons = {
@@ -37,17 +40,24 @@ class NavigationBar(tk.Frame):
         )
 
     def _switch_page(self, page_name):
+        logging.info(f"切换到页面: {page_name}")
         if self.page_factory:
             page = self.page_factory.get_page(page_name)
-            if page and page != self.master.current_page:
-                # 重置所有非禁用按钮到基础样式
+            if page and page != self.winfo_toplevel().current_page:
+                # 1. 发布事件
+                self.winfo_toplevel().event_bus.publish(
+                    Event(EVENT_TYPES['PAGE_SWITCH'], data={'new_page': page_name})
+                )
+                
+                # 2. 重置按钮样式
                 for btn in self.buttons.values():
-                    if btn.cget('state') != tk.DISABLED:  # 跳过禁用按钮
+                    if btn.cget('state') != tk.DISABLED:
                         btn.config(**AppConfig.BUTTON_STYLE)
-                        
-                # 设置当前活动按钮样式
+                
+                # 3. 设置当前按钮样式
                 new_button = self.buttons[page_name]
                 new_button.config(**AppConfig.ACTIVE_BUTTON_STYLE)
                 self.active_button = new_button
-                    
-                self.master.show_page(page)
+                
+                # 4. 切换页面，调用顶层窗口的show_page
+                self.winfo_toplevel().show_page(page)
