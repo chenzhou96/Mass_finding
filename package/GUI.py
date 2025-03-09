@@ -8,6 +8,7 @@ from .components.status_bar import StatusBar
 from .utils.widget_factory import WidgetFactory
 import logging
 import platform
+from PIL import Image, ImageTk
 
 class APP(tk.Tk):
     def __init__(self):
@@ -27,7 +28,8 @@ class APP(tk.Tk):
             self.iconbitmap(AppConfig.MainWindow.ICO)
         elif system == "Darwin":  # macOS
             # 需要通过PhotoImage加载ICNS
-            icon = tk.PhotoImage(file=AppConfig.MainWindow.ICNS)
+            image = Image.open(AppConfig.MainWindow.ICNS)
+            icon = ImageTk.PhotoImage(image)
             self.iconphoto(True, icon)  # macOS推荐使用iconphoto
         else:
             # 其他系统保留默认图标
