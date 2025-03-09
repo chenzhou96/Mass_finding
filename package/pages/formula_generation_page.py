@@ -7,16 +7,10 @@ from ..back_end.formulaGeneration import start_analysis
 from ..utils.data_validator import DataValidator
 from ..config import AppConfig
 import logging
+import json
+from pathlib import Path
 
 class FormulaGenerationPage(BasePage):
-
-    ADDUCT_CONFIG = {
-        "ESI+": ["H+", "H3O+", "NH4+", "Na+", "K+"],
-        "ESI-": ["H-", "Cl-", "HCOO-", "CH3COO-"],
-        "EI+": ["e+"],
-        "EI-": ["e-"]
-    }
-    MAX_ADDUCT_ROWS = 6  # 定义最大行数
 
     def __init__(self, parent, event_bus):
         super().__init__(parent, event_bus, title="Formula Generation")
@@ -49,9 +43,28 @@ class FormulaGenerationPage(BasePage):
         # 初始化加合物选项
         self._on_ms_mode_change()
 
+    def _get_adduct_config(self):
+        
+        config_path = Path(__file__).parent.parent / "back_end/config.json"
+
+        with open(config_path, "r", encoding="utf-8") as f:
+            config_data = json.load(f)
+            adducts_config = config_data["adducts"]
+
+        # 将嵌套字典转为值列表
+        return {
+            mode: list(adducts.values()) 
+            for mode, adducts in adducts_config.items()
+        }
+
     def _on_ms_mode_change(self, *args):
         current_mode = self.ms_mode.get()
-        adducts = self.ADDUCT_CONFIG.get(current_mode, [])
+        adduct_config = self._get_adduct_config()
+        max_adduct_rows = 1
+        for adduct_modes in adduct_config.values():
+            max_adduct_rows = max(max_adduct_rows, len(adduct_modes) + 1) # 1行用于标题
+
+        adducts = adduct_config.get(current_mode, [])
         
         # 销毁旧框架
         if hasattr(self, 'adduct_frame') and self.adduct_frame:
@@ -61,7 +74,7 @@ class FormulaGenerationPage(BasePage):
         # 创建新框架并固定高度
         self.adduct_frame = ttk.LabelFrame(self.left_frame, text="加合物模型")
         self.adduct_frame.configure(
-            height=self.MAX_ADDUCT_ROWS * 25,  # 5行×25px=125px
+            height=max_adduct_rows * 25,  # 5行×25px=125px
             takefocus=False
         )
         self.adduct_frame.grid(row=1, column=0, sticky="ew", pady=AppConfig.Padding.Y)
@@ -71,7 +84,7 @@ class FormulaGenerationPage(BasePage):
         
         # 预配置列和行
         self.adduct_frame.grid_columnconfigure(0, weight=1, minsize=150)  # 列配置
-        for row in range(self.MAX_ADDUCT_ROWS):
+        for row in range(max_adduct_rows):
             self.adduct_frame.grid_rowconfigure(row, minsize=25)  # 每行25px
         
         # 重置变量
@@ -91,7 +104,7 @@ class FormulaGenerationPage(BasePage):
             self.adduct_vars[adduct] = var
         
         # 隐藏多余行（使用同宽度占位符）
-        for idx in range(len(adducts), self.MAX_ADDUCT_ROWS):
+        for idx in range(len(adducts), max_adduct_rows):
             placeholder = ttk.Label(
                 self.adduct_frame, 
                 text=" ", 
@@ -122,7 +135,7 @@ class FormulaGenerationPage(BasePage):
         # 其他控件按行放置
         m2z_frame = ttk.LabelFrame(self.left_frame, text="m/z值")
         m2z_frame.grid(row=2, column=0, sticky="ew", pady=AppConfig.Padding.Y)
-        self.m2z = tk.DoubleVar()
+        self.m2z = tk.DoubleVar(value=100)
         ttk.Entry(m2z_frame, textvariable=self.m2z).pack(padx=AppConfig.Padding.X, pady=AppConfig.Padding.Y)
 
         # 误差范围
@@ -138,7 +151,7 @@ class FormulaGenerationPage(BasePage):
         ttk.Entry(charge_frame, textvariable=self.charge).pack(padx=AppConfig.Padding.X, pady=AppConfig.Padding.Y)
 
         # 在元素配置部分修改为：
-        elements = ["C", "N", "O", "S", "P", "Si", "F", "Cl", "Br", "I", "B", "Se"]  # 移除H
+        elements = ["C", "N", "O", "S", "P", "Si", "F", "Cl", "Br", "I", "B", "Se"]  # 默认H已经包含
         self.element_vars = {
             e: tk.StringVar(value="-1" if e in {"C", "N", "O"} else "0") 
             for e in elements
@@ -225,8 +238,14 @@ class FormulaGenerationPage(BasePage):
         # 验证参数
         validator = DataValidator()
         if not validator.validate(params):
-            logging.error("错误", "参数输入有误，请检查")
+            logging.error("参数输入有误，请检查")
             return
+        
+        elements = params["elements"]
+        for k, v in elements.items():
+            params['elements'][k] = int(v)
+
+        logging.debug(f"参数: {params}")
 
         # 调用后端分析（多线程）
         self.thread_pool.submit(self._run_analysis_background, params)
@@ -238,7 +257,7 @@ class FormulaGenerationPage(BasePage):
             self.after(0, self._apply_filters)
         except Exception as e:
             logging.error(f"分析失败: {e}")
-            self.after(0, lambda: logging.error("错误", f"分析失败: {e}"))
+            self.after(0, lambda e=e: logging.error(f"分析失败: {e}"))
 
     def _map_data(self, raw_data):
         mapped = []

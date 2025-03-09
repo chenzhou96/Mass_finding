@@ -2,40 +2,52 @@
 VERSION = "3.0.0"
 
 import os
-import winreg
+import platform
 import logging
 import datetime
 import csv
 import json
 from pathlib import Path
 
+# 根据操作系统类型选择合适的注册表处理方式
+if platform.system() == "Windows":
+    import winreg
+
 # ----------------------------   路径管理器   ----------------------------
 class PathManager:
-    def __init__(self):
-        pass
-
     @staticmethod
     def _get_desktop_path() -> str:
-        try:
-            # 通过注册表获取准确路径
-            with winreg.OpenKey(
-                winreg.HKEY_CURRENT_USER,
-                r'Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders'
-            ) as key:
-                desktop_path, _ = winreg.QueryValueEx(key, 'Desktop')
-                expanded_path = os.path.expandvars(desktop_path)
-                return expanded_path
-        except (OSError, WindowsError) as e:
-            logging.warning(f"Failed to access registry: {e}")
-            # 回退到环境变量获取
-            user_profile = os.environ.get('USERPROFILE', None)
-            if user_profile:
-                fallback_path = os.path.join(user_profile, 'Desktop')
-                logging.info(f"Falling back to environment variable USERPROFILE: {fallback_path}")
-                return fallback_path
+        system = platform.system()
+        if system == "Windows":
+            try:
+                with winreg.OpenKey(
+                    winreg.HKEY_CURRENT_USER,
+                    r'Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders'
+                ) as key:
+                    desktop_path, _ = winreg.QueryValueEx(key, 'Desktop')
+                    expanded_path = os.path.expandvars(desktop_path)
+                    return expanded_path
+            except (OSError, Exception) as e:
+                logging.warning(f"Failed to access registry: {e}")
+                # 回退到环境变量获取
+                user_profile = os.environ.get('USERPROFILE', None)
+                if user_profile:
+                    fallback_path = os.path.join(user_profile, 'Desktop')
+                    logging.info(f"Falling back to environment variable USERPROFILE: {fallback_path}")
+                    return fallback_path
+                else:
+                    logging.error("USERPROFILE environment variable is not set.")
+                    raise EnvironmentError("USERPROFILE environment variable is not set.")
+        elif system in ["Darwin", "Linux"]:
+            # 对于 macOS 和 Linux，尝试从 HOME 环境变量构建路径
+            home = os.environ.get('HOME', None)
+            if home:
+                return os.path.join(home, 'Desktop')
             else:
-                logging.error("USERPROFILE environment variable is not set.")
-                raise EnvironmentError("USERPROFILE environment variable is not set.")
+                logging.error("HOME environment variable is not set.")
+                raise EnvironmentError("HOME environment variable is not set.")
+        else:
+            raise NotImplementedError(f"Unsupported operating system: {system}")
 
     @staticmethod
     def get_mass_finding_cache_path() -> str:
