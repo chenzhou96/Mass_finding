@@ -7,9 +7,14 @@ class AppConfig:
     
     class MainWindow:
         TITLE = "质谱数据分析工具 V3.0 - designed by zc"
-        ICON = "./package/icon.ico"
+        ICO = "./package/icon.ico"
+        ICNS = "./package/icon.icns"
         WINDOW_SIZE = "1280x800"
         BG_COLOR = "#FFFFFF"
+
+    class Padding:
+        X = 2
+        Y = 2
 
     class BaseElement:
         BUTTON = {
@@ -118,9 +123,13 @@ class AppConfig:
             'font': (DEFUALT_FONT, 8),
         }
 
-    class Padding:
-        X = 2
-        Y = 2
+        DENSITY_SCALING = 1.2   # 密度缩放比例 
+
+    class FormulaGenerationPage:
+        INPUT_FRAME = {
+            'bg': '#FFFFFF',
+            'width': 150,
+        }
 
 EVENT_TYPES = {
     'PAGE_SWITCH': 'page_switch',

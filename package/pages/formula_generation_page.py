@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, filedialog
 from .base_page import BasePage
 from ..core.event import EventBus, Event
 from ..core.thread_pool import ThreadPool
@@ -9,24 +9,36 @@ from ..config import AppConfig
 import logging
 import json
 from pathlib import Path
+import tkinter.font as tkFont
 
 class FormulaGenerationPage(BasePage):
 
     def __init__(self, parent, event_bus):
         super().__init__(parent, event_bus, title="Formula Generation")
-        self.left_frame = tk.Frame(self, bg="white", padx=AppConfig.Padding.X, pady=AppConfig.Padding.Y)
-        self.right_frame = tk.Frame(self, bg="white", padx=AppConfig.Padding.X, pady=AppConfig.Padding.Y)
+        self.left_frame = tk.Frame(
+            self,
+            bg=AppConfig.FormulaGenerationPage.INPUT_FRAME['bg'],
+            padx=AppConfig.Padding.X, pady=AppConfig.Padding.Y,
+            width=AppConfig.FormulaGenerationPage.INPUT_FRAME['width'],
+        )
+        self.right_frame = tk.Frame(
+            self,
+            bg=AppConfig.FormulaGenerationPage.INPUT_FRAME['bg'],
+            padx=AppConfig.Padding.X,
+            pady=AppConfig.Padding.Y,
+        )
 
         # 初始化加合物框架
         self.adduct_frame = None
         self.adduct_vars = {}  # 重置为字典存储当前选中的加合物
 
         # 使用网格布局，左侧占1份，右侧占3份
-        self.grid_columnconfigure(0, weight=1)
-        self.grid_columnconfigure(1, weight=3)
+        self.grid_columnconfigure(0, weight=0)
+        self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
-        self.left_frame.grid(row=0, column=0, sticky="nsew")
+        self.left_frame.grid(row=0, column=0, sticky="nsw")
+        self.left_frame.grid_propagate(False)  # 禁用自动调整
         self.right_frame.grid(row=0, column=1, sticky="nsew")
 
         # 初始化所有控件
@@ -43,15 +55,14 @@ class FormulaGenerationPage(BasePage):
         # 初始化加合物选项
         self._on_ms_mode_change()
 
-    def _get_adduct_config(self):
-        
-        config_path = Path(__file__).parent.parent / "back_end/config.json"
+        # 绑定窗口调整事件
+        self.bind("<Configure>", self.on_window_resize)
 
+    def _get_adduct_config(self):
+        config_path = Path(__file__).parent.parent / "back_end/config.json"
         with open(config_path, "r", encoding="utf-8") as f:
             config_data = json.load(f)
             adducts_config = config_data["adducts"]
-
-        # 将嵌套字典转为值列表
         return {
             mode: list(adducts.values()) 
             for mode, adducts in adducts_config.items()
@@ -62,7 +73,7 @@ class FormulaGenerationPage(BasePage):
         adduct_config = self._get_adduct_config()
         max_adduct_rows = 1
         for adduct_modes in adduct_config.values():
-            max_adduct_rows = max(max_adduct_rows, len(adduct_modes) + 1) # 1行用于标题
+            max_adduct_rows = max(max_adduct_rows, len(adduct_modes) + 1)  # 1行用于标题
 
         adducts = adduct_config.get(current_mode, [])
         
@@ -71,21 +82,15 @@ class FormulaGenerationPage(BasePage):
             self.adduct_frame.destroy()
             self.adduct_frame = None
         
-        # 创建新框架并固定高度
+        # 创建新框架
         self.adduct_frame = ttk.LabelFrame(self.left_frame, text="加合物模型")
-        self.adduct_frame.configure(
-            height=max_adduct_rows * 25,  # 5行×25px=125px
-            takefocus=False
-        )
         self.adduct_frame.grid(row=1, column=0, sticky="ew", pady=AppConfig.Padding.Y)
         
         # 禁用自动调整
-        self.adduct_frame.grid_propagate(False)
+        self.adduct_frame.grid_propagate(True)
         
         # 预配置列和行
         self.adduct_frame.grid_columnconfigure(0, weight=1, minsize=150)  # 列配置
-        for row in range(max_adduct_rows):
-            self.adduct_frame.grid_rowconfigure(row, minsize=25)  # 每行25px
         
         # 重置变量
         self.adduct_vars = {}
@@ -99,133 +104,254 @@ class FormulaGenerationPage(BasePage):
                 variable=var,
                 width=12  # 保持足够宽度
             )
-            cb.grid(row=idx, column=0, sticky=tk.W + tk.E, padx=AppConfig.Padding.X, pady=0)  # 移除pady
+            cb.grid(row=idx, column=0, sticky="ew", padx=AppConfig.Padding.X, pady=0)  # 移除pady
             
             self.adduct_vars[adduct] = var
-        
-        # 隐藏多余行（使用同宽度占位符）
-        for idx in range(len(adducts), max_adduct_rows):
-            placeholder = ttk.Label(
-                self.adduct_frame, 
-                text=" ", 
-                width=12
-            )
-            placeholder.grid(row=idx, column=0, sticky="ew", pady=0)  # 移除pady
 
     def _setup_left_frame(self):
-        # 初始化网格布局
+        # 初始化网格布局并禁用自动调整
         self.left_frame.columnconfigure(0, weight=1)
+        self.left_frame.grid_propagate(False)  # 禁止子组件影响框架尺寸
         
-        # 质谱模式
-        ms_mode_frame = ttk.LabelFrame(self.left_frame, text="质谱模式")
+        # 质谱模式框架
+        ms_mode_frame = ttk.LabelFrame(self.left_frame, text="质谱模式", padding=(AppConfig.Padding.X, AppConfig.Padding.Y))
         ms_mode_frame.grid(row=0, column=0, sticky="ew", pady=AppConfig.Padding.Y)
         self.ms_mode = tk.StringVar(value="ESI+")
         self.ms_mode.trace_add("write", self._on_ms_mode_change)
         
-        ttk.OptionMenu(
+        # 限制OptionMenu宽度
+        option_menu = ttk.OptionMenu(
             ms_mode_frame, 
             self.ms_mode, 
             "ESI+", 
             *["ESI+", "ESI-", "EI+", "EI-"]
-        ).pack(padx=AppConfig.Padding.X, pady=AppConfig.Padding.Y)
-
-        # 预留加合物框架的位置（第二行）
-        self.adduct_frame = None  # 初始化为空
-
-        # 其他控件按行放置
-        m2z_frame = ttk.LabelFrame(self.left_frame, text="m/z值")
+        )
+        option_menu.pack(side=tk.LEFT, padx=AppConfig.Padding.X, pady=AppConfig.Padding.Y)
+        option_menu.config(width=6)  # 固定下拉菜单宽度
+        
+        # m/z值输入框
+        m2z_frame = ttk.LabelFrame(self.left_frame, text="m/z值", padding=(AppConfig.Padding.X, AppConfig.Padding.Y))
         m2z_frame.grid(row=2, column=0, sticky="ew", pady=AppConfig.Padding.Y)
         self.m2z = tk.DoubleVar(value=100)
-        ttk.Entry(m2z_frame, textvariable=self.m2z).pack(padx=AppConfig.Padding.X, pady=AppConfig.Padding.Y)
-
-        # 误差范围
-        error_frame = ttk.LabelFrame(self.left_frame, text="误差范围 (%)")
+        entry = ttk.Entry(m2z_frame, textvariable=self.m2z, width=8)
+        entry.pack(padx=AppConfig.Padding.X, pady=AppConfig.Padding.Y)
+        
+        # 误差范围输入框
+        error_frame = ttk.LabelFrame(self.left_frame, text="误差范围 (%)", padding=(AppConfig.Padding.X, AppConfig.Padding.Y))
         error_frame.grid(row=3, column=0, sticky="ew", pady=AppConfig.Padding.Y)
         self.error_pct = tk.DoubleVar(value=0.1)
-        ttk.Entry(error_frame, textvariable=self.error_pct).pack(padx=AppConfig.Padding.X, pady=AppConfig.Padding.Y)
-
-        # 电荷数
-        charge_frame = ttk.LabelFrame(self.left_frame, text="电荷数")
+        entry = ttk.Entry(error_frame, textvariable=self.error_pct, width=8)
+        entry.pack(padx=AppConfig.Padding.X, pady=AppConfig.Padding.Y)
+        
+        # 电荷数输入框
+        charge_frame = ttk.LabelFrame(self.left_frame, text="电荷数", padding=(AppConfig.Padding.X, AppConfig.Padding.Y))
         charge_frame.grid(row=4, column=0, sticky="ew", pady=AppConfig.Padding.Y)
         self.charge = tk.IntVar(value=1)
-        ttk.Entry(charge_frame, textvariable=self.charge).pack(padx=AppConfig.Padding.X, pady=AppConfig.Padding.Y)
+        entry = ttk.Entry(charge_frame, textvariable=self.charge, width=8)
+        entry.pack(padx=AppConfig.Padding.X, pady=AppConfig.Padding.Y)
 
-        # 在元素配置部分修改为：
-        elements = ["C", "N", "O", "S", "P", "Si", "F", "Cl", "Br", "I", "B", "Se"]  # 默认H已经包含
+        # 元素配置区优化
+        elements = ["C", "N", "O", "S", "P", "Si", "F", "Cl", "Br", "I", "B", "Se"]
         self.element_vars = {
             e: tk.StringVar(value="-1" if e in {"C", "N", "O"} else "0") 
             for e in elements
         }
 
-        # 使用两列布局
-        elements_frame = ttk.LabelFrame(self.left_frame, text="元素配置(不超过)")
+        elements_frame = ttk.LabelFrame(
+            self.left_frame, 
+            text="元素配置(不超过)"
+        )
         elements_frame.grid(row=5, column=0, sticky="nsew", pady=AppConfig.Padding.Y)
-        elements_frame.columnconfigure(0, weight=1)
-        elements_frame.columnconfigure(1, weight=1)
-        elements_frame.columnconfigure(2, weight=1)
-        elements_frame.columnconfigure(3, weight=1)
+        elements_frame.grid_propagate(True)  # 允许内容调整
+        elements_frame.columnconfigure(0, weight=0)  # 标签列固定
+        elements_frame.columnconfigure(1, weight=1)  # 输入列扩展
+        elements_frame.columnconfigure(2, weight=0)  # 标签列固定
+        elements_frame.columnconfigure(3, weight=1)  # 输入列扩展
 
         for i, elem in enumerate(elements):
-            row = i // 2        # 计算行号（每两元素占一行）
-            col = (i % 2) * 2   # 列号（0或2列）
+            row = i // 2        # 每行显示2个元素
+            col_in_row = i % 2  # 当前元素在行中的位置（0或1）
             
+            # 计算实际列位置：每组元素占两列（标签+输入框）
+            label_col = col_in_row * 2
+            entry_col = label_col + 1
+
             # 创建标签和输入框
-            ttk.Label(elements_frame, text=f"{elem}:").grid(
-                row=row, column=col, sticky=tk.W, padx=(AppConfig.Padding.X,0), pady=AppConfig.Padding.Y
+            ttk.Label(
+                elements_frame, 
+                text=f"{elem}:", 
+                width=3, 
+                anchor="e"
+            ).grid(
+                row=row, 
+                column=label_col, 
+                padx=AppConfig.Padding.X, 
+                pady=AppConfig.Padding.Y
             )
-            entry = ttk.Entry(elements_frame, textvariable=self.element_vars[elem], width=3)
-            entry.grid(row=row, column=col+1, sticky=tk.W, padx=(0,AppConfig.Padding.X), pady=AppConfig.Padding.Y)
-
-        # 限制元素配置区高度
-        elements_frame.configure(height=180)  # 根据实际行数调整高度
-        elements_frame.grid_propagate(False)  # 禁止自动调整大小
-
-        # 父容器的行配置
-        self.left_frame.grid_rowconfigure(5, weight=0)  # 防止该行自动扩展
+            
+            entry = ttk.Entry(
+                elements_frame, 
+                textvariable=self.element_vars[elem], 
+                width=3, 
+                justify="center"
+            )
+            entry.grid(
+                row=row, 
+                column=entry_col, 
+                padx=AppConfig.Padding.X, 
+                pady=AppConfig.Padding.Y
+            )
 
     def _setup_right_frame(self):
-        # 筛选栏
-        filter_frame = ttk.Frame(self.right_frame)
+        # 创建外层容器
+        scrollable_container = ttk.Frame(self.right_frame)
+        scrollable_container.pack(fill=tk.BOTH, expand=True)
+
+        # 创建水平滚动条
+        hsb = ttk.Scrollbar(scrollable_container, orient=tk.HORIZONTAL)
+        hsb.pack(side=tk.BOTTOM, fill=tk.X)
+
+        # 使用Canvas实现水平滚动
+        canvas = tk.Canvas(scrollable_container, xscrollcommand=hsb.set)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        hsb.config(command=canvas.xview)
+
+        # 内部容器用于放置筛选栏和表格
+        inner_frame = ttk.Frame(canvas)
+        canvas.create_window((0,0), window=inner_frame, anchor=tk.NW)
+
+        # 更新Canvas滚动区域
+        def on_configure(event):
+            canvas.configure(scrollregion=canvas.bbox('all'))
+        inner_frame.bind('<Configure>', on_configure)
+
+        # 筛选栏设置
+        filter_frame = ttk.Frame(inner_frame)
         filter_frame.pack(fill=tk.X, pady=AppConfig.Padding.Y)
 
         self.filters = {}
         columns = [
-            "H", "C", "N", "O", "F", "Si", "P", "B", "S", 
-            "Cl", "Br", "Se", "I", "Adduct", "DBR", "M/Z", "Mol Weight"
+            "M/Z", "Adduct", "Mol Weight", "DBR",
+            "C", "H", "N", "O", "S", "P",
+            "Si", "F", "Cl", "Br", "I", "B", "Se",
         ]
-        for col in columns:
-            var = tk.StringVar()
-            ttk.Entry(filter_frame, textvariable=var, width=5).pack(side=tk.LEFT, padx=AppConfig.Padding.X)
-            self.filters[col] = var
 
-        # 表格
+        # 配置筛选栏列数
+        filter_frame.columnconfigure(tuple(range(len(columns))), weight=1)
+
+        # 创建筛选标题和输入框
+        for col_idx, col_name in enumerate(columns):
+            ttk.Label(filter_frame, text=col_name).grid(
+                row=0, column=col_idx, 
+                padx=AppConfig.Padding.X, 
+                sticky="ew",
+                ipadx=2
+            )
+            var = tk.StringVar()
+            entry = ttk.Entry(filter_frame, textvariable=var, width=5)
+            entry.grid(
+                row=1, column=col_idx, 
+                padx=AppConfig.Padding.X, 
+                sticky="ew",
+                ipadx=2
+            )
+            self.filters[col_name] = var
+
+        # 表格容器框架
+        table_container = ttk.Frame(inner_frame)
+        table_container.pack(fill=tk.BOTH, expand=True, pady=AppConfig.Padding.Y)
+
+        # 垂直滚动条
+        vsb = ttk.Scrollbar(table_container, orient=tk.VERTICAL)
+
+        # 创建Treeview并关联垂直滚动
         self.table = ttk.Treeview(
-            self.right_frame,
+            table_container,
             columns=columns,
             show="headings",
-            selectmode="browse"
+            selectmode="browse",
+            yscrollcommand=vsb.set,
         )
+        vsb.config(command=self.table.yview)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.table.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # 设置表格列属性
         for col in columns:
             self.table.heading(col, text=col)
-            self.table.column(col, width=60, anchor=tk.CENTER)
-        self.table.pack(fill=tk.BOTH, expand=True, pady=AppConfig.Padding.Y)
+            self.table.column(col, 
+                width=0, 
+                minwidth=50, 
+                anchor=tk.CENTER, 
+                stretch=True
+            )
 
         # 绑定筛选事件
         for var in self.filters.values():
             var.trace_add("write", self._apply_filters)
 
+        # 自动调整列宽
+        self.after(100, self.auto_resize_columns)
+
+    def auto_resize_columns(self):
+        for col in self.table["columns"]:
+            col_title_width = tkFont.Font().measure(col)  # 列标题宽度
+            if self.data:
+                data_widths = [tkFont.Font().measure(str(item[col])) for item in self.data]
+                max_width = max(col_title_width, *data_widths)
+            else:
+                max_width = col_title_width  # 如果数据为空，只使用列标题宽度
+            self.table.column(col, width=max_width + 20)  # 预留边距
+
+    def _open_json_file(self):
+        file_path = filedialog.askopenfilename(
+            title="选择JSON文件",
+            filetypes=[("JSON文件", "*.json"), ("所有文件", "*.*")]
+        )
+        if file_path:
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                
+                required_keys = ["metadata", "input_params", "results"]
+                if not all(key in data for key in required_keys):
+                    raise ValueError("JSON文件缺少必要结构: {}".format(
+                        ", ".join([k for k in required_keys if k not in data])
+                    ))
+                
+                if not isinstance(data["results"], list):
+                    raise TypeError("results字段必须为数组类型")
+                
+                self.data = self._map_data(data["results"])
+                self._apply_filters()
+                
+            except json.JSONDecodeError as je:
+                logging.error(f"JSON解析失败: {str(je)}")
+            except (KeyError, ValueError, TypeError) as e:
+                logging.error(f"文件内容异常: {str(e)}")
+            except Exception as e:
+                logging.error(f"文件读取失败: {str(e)}")
+
     def _setup_buttons(self):
         btn_frame = ttk.Frame(self.left_frame)
         btn_frame.grid(row=6, column=0, sticky="ew", pady=AppConfig.Padding.Y)
-
+        
+        btn_frame.grid_columnconfigure(0, weight=1)  # 设置列权重为1，使按钮居中
+        
         ttk.Button(
             btn_frame, 
             text="开始分析", 
             command=self._run_analysis
-        ).pack(padx=AppConfig.Padding.X, pady=AppConfig.Padding.Y)
+        ).grid(row=0, column=0, sticky=tk.EW, padx=AppConfig.Padding.X, pady=AppConfig.Padding.Y)
+        
+        ttk.Button(
+            btn_frame, 
+            text="导入文件", 
+            command=self._open_json_file
+        ).grid(row=1, column=0, sticky=tk.EW, padx=AppConfig.Padding.X, pady=AppConfig.Padding.Y)
 
     def _run_analysis(self):
-        # 收集参数
         params = {
             "ms_mode": self.ms_mode.get(),
             "adduct_model": [k for k, v in self.adduct_vars.items() if v.get()],
@@ -235,7 +361,6 @@ class FormulaGenerationPage(BasePage):
             "elements": {k: v.get() for k, v in self.element_vars.items()}
         }
 
-        # 验证参数
         validator = DataValidator()
         if not validator.validate(params):
             logging.error("参数输入有误，请检查")
@@ -247,7 +372,6 @@ class FormulaGenerationPage(BasePage):
 
         logging.debug(f"参数: {params}")
 
-        # 调用后端分析（多线程）
         self.thread_pool.submit(self._run_analysis_background, params)
 
     def _run_analysis_background(self, params):
@@ -263,32 +387,29 @@ class FormulaGenerationPage(BasePage):
         mapped = []
         for item in raw_data:
             row = {
-                "H": item["formula"].get("H", ""),
+                "M/Z": item["calculated_properties"].get("predicted_mz", ""),
+                "Adduct": item["adduct_type"],
+                "Mol Weight": item["calculated_properties"].get("molecular_weight", ""),
+                "DBR": item["calculated_properties"].get("dbr", ""),
                 "C": item["formula"].get("C", ""),
+                "H": item["formula"].get("H", ""),
                 "N": item["formula"].get("N", ""),
                 "O": item["formula"].get("O", ""),
-                "F": item["formula"].get("F", ""),
-                "Si": item["formula"].get("Si", ""),
-                "P": item["formula"].get("P", ""),
-                "B": item["formula"].get("B", ""),
                 "S": item["formula"].get("S", ""),
+                "P": item["formula"].get("P", ""),
+                "Si": item["formula"].get("Si", ""),
+                "F": item["formula"].get("F", ""),
                 "Cl": item["formula"].get("Cl", ""),
                 "Br": item["formula"].get("Br", ""),
-                "Se": item["formula"].get("Se", ""),
                 "I": item["formula"].get("I", ""),
-                "Adduct": item["adduct_type"],
-                "DBR": item["calculated_properties"].get("dbr", ""),
-                "M/Z": item["calculated_properties"].get("predicted_mz", ""),
-                "Mol Weight": item["calculated_properties"].get("molecular_weight", "")
+                "B": item["formula"].get("B", ""),
+                "Se": item["formula"].get("Se", ""),  
             }
             mapped.append(row)
         return mapped
 
     def _apply_filters(self, *args):
-        # 清空表格
         self.table.delete(*self.table.get_children())
-
-        # 过滤数据
         for item in self.data:
             valid = True
             for col in self.filters:
@@ -300,3 +421,11 @@ class FormulaGenerationPage(BasePage):
                         break
             if valid:
                 self.table.insert("", "end", values=list(item.values()))
+
+    def on_window_resize(self, event):
+        # 动态调整元素配置区高度
+        elements_frame = self.left_frame.winfo_children()[5]
+        elements_frame.config(height=int(event.height * 0.3))  # 占总高度30%
+        
+        # 触发表格列宽重计算
+        self.after(100, self.auto_resize_columns)

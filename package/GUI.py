@@ -7,6 +7,7 @@ from .core.page_factory import PageFactory
 from .components.status_bar import StatusBar
 from .utils.widget_factory import WidgetFactory
 import logging
+import platform
 
 class APP(tk.Tk):
     def __init__(self):
@@ -16,8 +17,21 @@ class APP(tk.Tk):
         # 1. 初始化主窗口
         super().__init__()
         self.title(AppConfig.MainWindow.TITLE)
-        self.iconbitmap(AppConfig.MainWindow.ICON)
         self.geometry(AppConfig.MainWindow.WINDOW_SIZE)
+
+        # 系统类型检测
+        system = platform.system()
+
+        # 动态设置图标
+        if system == "Windows":
+            self.iconbitmap(AppConfig.MainWindow.ICO)
+        elif system == "Darwin":  # macOS
+            # 需要通过PhotoImage加载ICNS
+            icon = tk.PhotoImage(file=AppConfig.MainWindow.ICNS)
+            self.iconphoto(True, icon)  # macOS推荐使用iconphoto
+        else:
+            # 其他系统保留默认图标
+            pass
 
         self.configure(bg=AppConfig.MainWindow.BG_COLOR)
 
