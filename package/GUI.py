@@ -37,23 +37,23 @@ class APP(tk.Tk):
 
         self.configure(bg=AppConfig.MainWindow.BG_COLOR)
 
-        # 2. 创建布局容器
-        self.left_frame = tk.Frame(self, **AppConfig.PageWindow.FRAME)  # 左侧主内容区域
-        self.right_frame = tk.Frame(self, **AppConfig.LogWindow.FRAME)  # 右侧日志区域
-
-        # 3. 初始化核心组件（先初始化事件总线）
-        self.event_bus = EventBus()
-        self.page_factory = PageFactory(self.left_frame, self.event_bus)
+        # 2. 初始化核心组件
         self.widget_factory = WidgetFactory()  # 创建 WidgetFactory 实例
+        self.event_bus = EventBus()
+
+        # 3. 创建布局容器
+        self.left_frame = self.widget_factory.create_frame(self, **AppConfig.FunctionZone.frame)
+        self.right_frame = self.widget_factory.create_frame(self, **AppConfig.InteractiveZone.frame)
+        self.page_factory = PageFactory(self.left_frame, self.event_bus)
 
         # 4. 创建导航栏
         self.nav_bar = NavigationBar(self, self.page_factory, self.widget_factory)
-        self.nav_bar.pack(side=tk.TOP, fill=tk.X, padx=5, pady=(5, 10))
+        self.nav_bar.pack(side=tk.TOP, fill=tk.X, **AppConfig.NavigationBar.padding)
 
         # 5. 布局容器定位
-        self.right_frame.pack(side=tk.RIGHT, fill=tk.Y, padx=(5, 10), pady=5)
+        self.right_frame.pack(side=tk.RIGHT, fill=tk.Y, **AppConfig.InteractiveZone.padding)
         self.right_frame.pack_propagate(0)  # 禁止自动调整大小
-        self.left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(10, 5), pady=5)
+        self.left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, **AppConfig.FunctionZone.padding)
 
         # 6. 初始化日志显示组件（移到事件总线之后）
         scrollable_text = self.widget_factory.create_scrollable_text(self.right_frame)
@@ -63,7 +63,7 @@ class APP(tk.Tk):
         self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         # 7. 创建状态栏
-        self.status_bar = StatusBar(self.left_frame, event_bus=self.event_bus)
+        self.status_bar = StatusBar(self.left_frame, widget_factory=self.widget_factory, event_bus=self.event_bus)
         self.status_bar.pack(side=tk.BOTTOM, fill=tk.X)
 
         # 8. 显示初始页面
@@ -86,9 +86,7 @@ class APP(tk.Tk):
         page.pack(fill=tk.BOTH, expand=True)
 
         # 显示新页面（固定在left_frame内）
-        page.pack(fill=tk.BOTH, expand=True, 
-                padx=AppConfig.Padding.X,  # 统一间距配置
-                pady=AppConfig.Padding.Y)
+        page.pack(fill=tk.BOTH, expand=True, **AppConfig.FunctionZone.padding)
 
         self.current_page = page  # 更新当前页面状态
 

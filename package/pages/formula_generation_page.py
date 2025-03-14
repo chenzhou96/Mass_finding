@@ -5,6 +5,7 @@ from ..core.event import EventBus, Event
 from ..core.thread_pool import ThreadPool
 from ..back_end.formulaGeneration import start_analysis
 from ..utils.data_validator import DataValidator
+from ..utils.widget_factory import WidgetFactory
 from ..config import AppConfig
 import logging
 import json
@@ -15,18 +16,9 @@ class FormulaGenerationPage(BasePage):
 
     def __init__(self, parent, event_bus):
         super().__init__(parent, event_bus, title="Formula Generation")
-        self.left_frame = tk.Frame(
-            self,
-            bg=AppConfig.FormulaGenerationPage.INPUT_FRAME['bg'],
-            padx=AppConfig.Padding.X, pady=AppConfig.Padding.Y,
-            width=AppConfig.FormulaGenerationPage.INPUT_FRAME['width'],
-        )
-        self.right_frame = tk.Frame(
-            self,
-            bg=AppConfig.FormulaGenerationPage.INPUT_FRAME['bg'],
-            padx=AppConfig.Padding.X,
-            pady=AppConfig.Padding.Y,
-        )
+        self.widget_factory = WidgetFactory()
+        self.left_frame = self.widget_factory.create_frame(self, **AppConfig.FunctionZone.FormulaGenerationPage.input_frame)
+        self.right_frame = self.widget_factory.create_frame(self, **AppConfig.FunctionZone.FormulaGenerationPage.output_frame)
 
         # 初始化加合物框架
         self.adduct_frame = None
@@ -83,14 +75,14 @@ class FormulaGenerationPage(BasePage):
             self.adduct_frame = None
         
         # 创建新框架
-        self.adduct_frame = ttk.LabelFrame(self.left_frame, text="加合物模型")
-        self.adduct_frame.grid(row=1, column=0, sticky="ew", pady=AppConfig.Padding.Y)
+        self.adduct_frame = self.widget_factory.create_labelframe(self.left_frame, text="加合物模型")
+        self.adduct_frame.grid(row=1, column=0, sticky="ew")
         
         # 禁用自动调整
         self.adduct_frame.grid_propagate(True)
         
         # 预配置列和行
-        self.adduct_frame.grid_columnconfigure(0, weight=1, minsize=150)  # 列配置
+        self.adduct_frame.grid_columnconfigure(0, weight=1)  # 列配置
         
         # 重置变量
         self.adduct_vars = {}
@@ -98,13 +90,12 @@ class FormulaGenerationPage(BasePage):
         # 添加选项
         for idx, adduct in enumerate(adducts):
             var = tk.BooleanVar()
-            cb = ttk.Checkbutton(
+            cb = self.widget_factory.create_checkbutton(
                 self.adduct_frame, 
                 text=adduct, 
                 variable=var,
-                width=12  # 保持足够宽度
             )
-            cb.grid(row=idx, column=0, sticky="ew", padx=AppConfig.Padding.X, pady=0)  # 移除pady
+            cb.grid(row=idx, column=0, sticky="w")
             
             self.adduct_vars[adduct] = var
 
@@ -114,8 +105,8 @@ class FormulaGenerationPage(BasePage):
         self.left_frame.grid_propagate(False)  # 禁止子组件影响框架尺寸
         
         # 质谱模式框架
-        ms_mode_frame = ttk.LabelFrame(self.left_frame, text="质谱模式", padding=(AppConfig.Padding.X, AppConfig.Padding.Y))
-        ms_mode_frame.grid(row=0, column=0, sticky="ew", pady=AppConfig.Padding.Y)
+        ms_mode_frame = self.widget_factory.create_labelframe(self.left_frame, text="质谱模式")
+        ms_mode_frame.grid(row=0, column=0, sticky="ew")
         self.ms_mode = tk.StringVar(value="ESI+")
         self.ms_mode.trace_add("write", self._on_ms_mode_change)
         
@@ -126,29 +117,28 @@ class FormulaGenerationPage(BasePage):
             "ESI+", 
             *["ESI+", "ESI-", "EI+", "EI-"]
         )
-        option_menu.pack(side=tk.LEFT, padx=AppConfig.Padding.X, pady=AppConfig.Padding.Y)
-        option_menu.config(width=6)  # 固定下拉菜单宽度
+        option_menu.pack(side=tk.LEFT, **AppConfig.FunctionZone.FormulaGenerationPage.padding)
         
         # m/z值输入框
-        m2z_frame = ttk.LabelFrame(self.left_frame, text="m/z值", padding=(AppConfig.Padding.X, AppConfig.Padding.Y))
-        m2z_frame.grid(row=2, column=0, sticky="ew", pady=AppConfig.Padding.Y)
+        m2z_frame = self.widget_factory.create_labelframe(self.left_frame, text="m/z值")
+        m2z_frame.grid(row=2, column=0, sticky="w")
         self.m2z = tk.DoubleVar(value=100)
-        entry = ttk.Entry(m2z_frame, textvariable=self.m2z, width=8)
-        entry.pack(padx=AppConfig.Padding.X, pady=AppConfig.Padding.Y)
+        entry = self.widget_factory.create_entry(m2z_frame, textvariable=self.m2z, **AppConfig.FunctionZone.FormulaGenerationPage.input_entry)
+        entry.pack(**AppConfig.FunctionZone.FormulaGenerationPage.padding)
         
         # 误差范围输入框
-        error_frame = ttk.LabelFrame(self.left_frame, text="误差范围 (%)", padding=(AppConfig.Padding.X, AppConfig.Padding.Y))
-        error_frame.grid(row=3, column=0, sticky="ew", pady=AppConfig.Padding.Y)
+        error_frame = self.widget_factory.create_labelframe(self.left_frame, text="误差范围 (%)")
+        error_frame.grid(row=3, column=0, sticky="w")
         self.error_pct = tk.DoubleVar(value=0.1)
-        entry = ttk.Entry(error_frame, textvariable=self.error_pct, width=8)
-        entry.pack(padx=AppConfig.Padding.X, pady=AppConfig.Padding.Y)
+        entry = self.widget_factory.create_entry(error_frame, textvariable=self.error_pct, **AppConfig.FunctionZone.FormulaGenerationPage.input_entry)
+        entry.pack(**AppConfig.FunctionZone.FormulaGenerationPage.padding)
         
         # 电荷数输入框
-        charge_frame = ttk.LabelFrame(self.left_frame, text="电荷数", padding=(AppConfig.Padding.X, AppConfig.Padding.Y))
-        charge_frame.grid(row=4, column=0, sticky="ew", pady=AppConfig.Padding.Y)
+        charge_frame = self.widget_factory.create_labelframe(self.left_frame, text="电荷数")
+        charge_frame.grid(row=4, column=0, sticky="w")
         self.charge = tk.IntVar(value=1)
-        entry = ttk.Entry(charge_frame, textvariable=self.charge, width=8)
-        entry.pack(padx=AppConfig.Padding.X, pady=AppConfig.Padding.Y)
+        entry = self.widget_factory.create_entry(charge_frame, textvariable=self.charge, **AppConfig.FunctionZone.FormulaGenerationPage.input_entry)
+        entry.pack(**AppConfig.FunctionZone.FormulaGenerationPage.padding)
 
         # 元素配置区优化
         elements = ["C", "N", "O", "S", "P", "Si", "F", "Cl", "Br", "I", "B", "Se"]
@@ -157,11 +147,8 @@ class FormulaGenerationPage(BasePage):
             for e in elements
         }
 
-        elements_frame = ttk.LabelFrame(
-            self.left_frame, 
-            text="元素配置(不超过)"
-        )
-        elements_frame.grid(row=5, column=0, sticky="nsew", pady=AppConfig.Padding.Y)
+        elements_frame = self.widget_factory.create_labelframe(self.left_frame, text="元素配置(不超过)")
+        elements_frame.grid(row=5, column=0, sticky="nsew")
         elements_frame.grid_propagate(True)  # 允许内容调整
         elements_frame.columnconfigure(0, weight=0)  # 标签列固定
         elements_frame.columnconfigure(1, weight=1)  # 输入列扩展
@@ -176,35 +163,15 @@ class FormulaGenerationPage(BasePage):
             label_col = col_in_row * 2
             entry_col = label_col + 1
 
-            # 创建标签和输入框
-            ttk.Label(
-                elements_frame, 
-                text=f"{elem}:", 
-                width=3, 
-                anchor="e"
-            ).grid(
-                row=row, 
-                column=label_col, 
-                padx=AppConfig.Padding.X, 
-                pady=AppConfig.Padding.Y
-            )
+            element_label = self.widget_factory.create_label(elements_frame, text=f"{elem}:", **AppConfig.FunctionZone.FormulaGenerationPage.element_label)
+            element_label.grid(row=row, column=label_col, **AppConfig.FunctionZone.FormulaGenerationPage.padding,)
             
-            entry = ttk.Entry(
-                elements_frame, 
-                textvariable=self.element_vars[elem], 
-                width=3, 
-                justify="center"
-            )
-            entry.grid(
-                row=row, 
-                column=entry_col, 
-                padx=AppConfig.Padding.X, 
-                pady=AppConfig.Padding.Y
-            )
+            entry = self.widget_factory.create_entry(elements_frame, textvariable=self.element_vars[elem], **AppConfig.FunctionZone.FormulaGenerationPage.element_entry)
+            entry.grid(row=row, column=entry_col, **AppConfig.FunctionZone.FormulaGenerationPage.padding)
 
     def _setup_right_frame(self):
         # 创建外层容器
-        scrollable_container = ttk.Frame(self.right_frame)
+        scrollable_container = self.widget_factory.create_scrolled_window(self.right_frame)
         scrollable_container.pack(fill=tk.BOTH, expand=True)
 
         # 创建水平滚动条
@@ -334,22 +301,25 @@ class FormulaGenerationPage(BasePage):
                 logging.error(f"文件读取失败: {str(e)}")
 
     def _setup_buttons(self):
-        btn_frame = ttk.Frame(self.left_frame)
-        btn_frame.grid(row=6, column=0, sticky="ew", pady=AppConfig.Padding.Y)
+        btn_frame = self.widget_factory.create_frame(self.left_frame)
+        # btn_frame = ttk.Frame(self.left_frame)
+        btn_frame.grid(row=6, column=0, sticky="ew")
         
         btn_frame.grid_columnconfigure(0, weight=1)  # 设置列权重为1，使按钮居中
         
-        ttk.Button(
+        btn_run = self.widget_factory.create_button(
             btn_frame, 
             text="开始分析", 
             command=self._run_analysis
-        ).grid(row=0, column=0, sticky=tk.EW, padx=AppConfig.Padding.X, pady=AppConfig.Padding.Y)
+        )
+        btn_run.grid(row=0, column=0, sticky=tk.EW)
         
-        ttk.Button(
+        btn_open = self.widget_factory.create_button(
             btn_frame, 
             text="导入文件", 
             command=self._open_json_file
-        ).grid(row=1, column=0, sticky=tk.EW, padx=AppConfig.Padding.X, pady=AppConfig.Padding.Y)
+        )
+        btn_open.grid(row=1, column=0, sticky=tk.EW)
 
     def _run_analysis(self):
         params = {

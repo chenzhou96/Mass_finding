@@ -1,14 +1,11 @@
 import tkinter as tk
-from ..config import AppConfig
-from ..utils.widget_factory import WidgetFactory
 from ..core.event import Event
 
 class StatusBar(tk.Frame):
-    def __init__(self, parent, event_bus=None):
-        super().__init__(parent, **AppConfig.StatusBar.FRAME)
+    def __init__(self, parent, widget_factory, event_bus=None):
+        super().__init__(parent)
         self.event_bus = event_bus
-        self.widget_factory = WidgetFactory()  # 创建 WidgetFactory 实例
-        self.status_label = self.widget_factory.create_status_label(self, "就绪")
+        self.status_label = widget_factory.create_status_label(self, "就绪")
         self.status_label.pack(side=tk.LEFT, padx=10)
         
         self._subscribe_events()

@@ -5,7 +5,7 @@ import logging
 
 class NavigationBar(tk.Frame):
     def __init__(self, parent, page_factory, widget_factory):
-        super().__init__(parent, **AppConfig.NavigationBar.FRAME)
+        super().__init__(parent, **AppConfig.NavigationBar.frame)
         self.page_factory = page_factory
         self.widget_factory = widget_factory
         self.active_button = None  # 当前活动按钮跟踪
@@ -29,7 +29,7 @@ class NavigationBar(tk.Frame):
             self,
             text=text,
             command=lambda p=page_name: self._switch_page(p),
-            **AppConfig.NavigationBar.BUTTON
+            **AppConfig.NavigationBar.button
         )
 
     def _switch_page(self, page_name):
@@ -45,11 +45,11 @@ class NavigationBar(tk.Frame):
                 # 2. 重置按钮样式
                 for btn in self.buttons.values():
                     if btn.cget('state') == tk.NORMAL:
-                        btn.config(**AppConfig.NavigationBar.BUTTON)
+                        btn.config(**AppConfig.NavigationBar.button)
                 
                 # 3. 设置当前按钮样式
                 new_button = self.buttons[page_name]
-                new_button.config(**AppConfig.NavigationBar.ACTIVE_BUTTON)
+                new_button.config(**AppConfig.NavigationBar.active_button)
                 self.active_button = new_button
                 
                 # 4. 切换页面，调用顶层窗口的show_page

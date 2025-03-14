@@ -8,5 +8,4 @@ class InterfacePage(BasePage):
         tk.Label(
             self,
             text="功能暂未开放",
-            **AppConfig.BaseElement.TEXT,
         ).pack(expand=True)
