@@ -1,4 +1,5 @@
 import tkinter as tk
+from tkinter import ttk
 from .components.navigation_bar import NavigationBar
 from .utils.logger import Logger
 from .core.event import EventBus
@@ -36,6 +37,15 @@ class APP(tk.Tk):
             pass
 
         self.configure(bg=AppConfig.MainWindow.BG_COLOR)
+
+        # 创建全局样式对象
+        style = ttk.Style()
+
+        # 1. 设置基础组件的默认背景颜色
+        style.configure(
+            '.',          # 作用于所有组件
+            background=AppConfig.MainWindow.BG_COLOR,  # 主背景色
+        )
 
         # 2. 初始化核心组件
         self.widget_factory = WidgetFactory()  # 创建 WidgetFactory 实例

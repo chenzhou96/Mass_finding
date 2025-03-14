@@ -22,11 +22,19 @@ class PageFactory:
                 'Interface6Page': InterfacePage   # 需要实现
             }
 
+            self._instances = {}
+
     def get_page(self, page_name):
         page_class = self.page_classes.get(page_name)
         if not page_class:
             logging.error(f"未找到页面类: {page_name}")
             return self.get_page('BlankPage')  # 回退到默认页面
         
-        # 按需创建实例（避免提前初始化所有页面）
-        return page_class(self.root, self.event_bus)
+        # 检查是否已存在实例，存在则直接返回
+        if page_name in self._instances:
+            return self._instances[page_name]
+        
+        # 不存在则创建新实例并缓存
+        instance = page_class(self.root, self.event_bus)
+        self._instances[page_name] = instance
+        return instance

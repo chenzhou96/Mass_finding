@@ -14,8 +14,8 @@ class BaseConfig:
     # 极简风配色方案
     PRIMARY_COLOR = "#457B9D"   # 北欧蓝（品牌主色）
     SECONDARY_COLOR = "#C7C7CC" # 精钢灰（辅助色）
-    # BACKGROUND = "#FBFBFC"      # 云母白（主背景）
-    BACKGROUND = "red"
+    THIRD_COLOR = "#E8E8E8"     # 灰白（背景色）
+    BACKGROUND = "#FBFBFC"      # 云母白（主背景）
     TEXT_DARK = "#2D3436"       # 宇宙灰（标题文字）
     TEXT_LIGHT = "#666666"      # 石墨灰（次要文字）
     ACCENT_COLOR = "#D7E7F5"    # 湖泊蓝（状态提示）
@@ -43,7 +43,7 @@ class BaseConfig:
 class BaseElement:
     frame = {
         'bg': BaseConfig.BACKGROUND,
-        'bd': BaseConfig.BD_A,
+        'bd': BaseConfig.BD_B,
         'relief': tk.FLAT,
         'padx': BaseConfig.PADDING_A,
         'pady': BaseConfig.PADDING_A,
@@ -53,20 +53,21 @@ class BaseElement:
         'bg': BaseConfig.BACKGROUND,
         'bd': BaseConfig.BD_B,
         'fg': BaseConfig.TEXT_DARK,
-        'relief': tk.GROOVE,
+        'relief': tk.FLAT,
+        'font': (BaseConfig.FONT_STYLE, BaseConfig.FONT_SIZE, 'bold'),
         'padx': BaseConfig.PADDING_A,
         'pady': BaseConfig.PADDING_A,
     }
 
     toplevel = {
         'bg': BaseConfig.BACKGROUND,
-        'bd': BaseConfig.BD_A,
+        'bd': BaseConfig.BD_B,
         'relief': tk.FLAT,
     }
 
     panedWindow = {
         'bg': BaseConfig.BACKGROUND,
-        'bd': BaseConfig.BD_A,
+        'bd': BaseConfig.BD_B,
         'relief': tk.FLAT,
     }
 
@@ -80,7 +81,7 @@ class BaseElement:
         'bg': BaseConfig.BACKGROUND,
         'fg': BaseConfig.TEXT_DARK,
         'bd': BaseConfig.BD_B,
-        'relief': tk.FLAT,
+        'relief': tk.RIDGE,
         'activebackground': BaseConfig.SECONDARY_COLOR,
         'activeforeground': BaseConfig.PRIMARY_COLOR,
         'font': (BaseConfig.FONT_STYLE, BaseConfig.FONT_SIZE),
@@ -92,7 +93,7 @@ class BaseElement:
         'bg': BaseConfig.BACKGROUND,
         'fg': BaseConfig.TEXT_DARK,
         'bd': BaseConfig.BD_B,
-        'relief': tk.SOLID,
+        'relief': tk.SUNKEN,
         'insertbackground': BaseConfig.TEXT_DARK,
         'font': (BaseConfig.FONT_STYLE, BaseConfig.FONT_SIZE),
     }
@@ -101,6 +102,8 @@ class BaseElement:
         'bg': BaseConfig.BACKGROUND,
         'fg': BaseConfig.TEXT_DARK,
         'font': (BaseConfig.FONT_STYLE, BaseConfig.FONT_SIZE),
+        'padx': BaseConfig.PADDING_A,
+        'pady': BaseConfig.PADDING_A,
     }
 
     text = {
@@ -112,6 +115,11 @@ class BaseElement:
     }
 
     checkbutton = {
+        'bg': BaseConfig.BACKGROUND,
+        'fg': BaseConfig.TEXT_DARK,
+        'bd': BaseConfig.BD_A,
+        'relief': tk.FLAT,
+        'font': (BaseConfig.FONT_STYLE, BaseConfig.FONT_SIZE),
         'padx': BaseConfig.PADDING_A,
         'pady': BaseConfig.PADDING_A,
     }
@@ -129,7 +137,9 @@ class AppConfig:
 
     # 导航栏
     class NavigationBar:
-        frame = {}
+        frame = {
+            **BaseElement.frame,
+        }
 
         button = {
             **BaseElement.button,
@@ -207,6 +217,11 @@ class AppConfig:
                 'pady': BaseConfig.PADDING_A,
             }
 
+            option_menu = {
+                'background': BaseConfig.THIRD_COLOR,
+                'foreground': BaseConfig.TEXT_DARK,
+            }
+
             element_label = {
                 'width': 2,
                 'anchor': 'e',
@@ -218,10 +233,6 @@ class AppConfig:
             }
 
             output_frame = {}
-
-    class Padding:
-        X = BaseConfig.PADDING_A
-        Y = BaseConfig.PADDING_A
 
 
 EVENT_TYPES = {
