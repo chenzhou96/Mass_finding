@@ -1,12 +1,13 @@
 import tkinter as tk
 from tkinter import ttk, filedialog
 from .base_page import BasePage
-from ...core.event import EventBus, Event
+from ...core.event import Event
 from ...core.thread_pool import ThreadPool
 from ...service.formulaGeneration import start_analysis
 from ...utils.data_validator import DataValidator
 from ...utils.widget_factory import WidgetFactory
-from ...config.config_temp import AppConfig
+from ...config.AppUI_config import AppUIConfig
+from ...config.event_config import EventType, EventPriority
 from ...config.path_config import CHEM_ELEMENTS_CONFIG_PATH
 import logging
 import json
@@ -16,11 +17,11 @@ import re
 
 class FormulaGenerationPage(BasePage):
 
-    def __init__(self, parent, event_bus):
-        super().__init__(parent, event_bus, title="Formula Generation")
+    def __init__(self, parent, event_mgr, logger):
+        super().__init__(parent, event_mgr, logger, title="Formula Generation")
         self.widget_factory = WidgetFactory()
-        self.left_frame = self.widget_factory.create_frame(self, **AppConfig.FunctionZone.FormulaGenerationPage.input_frame)
-        self.right_frame = self.widget_factory.create_frame(self, **AppConfig.FunctionZone.FormulaGenerationPage.output_frame)
+        self.left_frame = self.widget_factory.create_frame(self, **AppUIConfig.FunctionZone.FormulaGenerationPage.input_frame)
+        self.right_frame = self.widget_factory.create_frame(self, **AppUIConfig.FunctionZone.FormulaGenerationPage.output_frame)
 
         # 初始化加合物框架
         self.adduct_frame = None
@@ -105,7 +106,7 @@ class FormulaGenerationPage(BasePage):
 
         # 创建样式
         style = ttk.Style()
-        style.configure("TMenubutton", **AppConfig.FunctionZone.FormulaGenerationPage.option_menu)
+        style.configure("TMenubutton", **AppUIConfig.FunctionZone.FormulaGenerationPage.option_menu)
 
         # 初始化网格布局并禁用自动调整
         self.left_frame.columnconfigure(0, weight=1)
@@ -129,25 +130,25 @@ class FormulaGenerationPage(BasePage):
             *["ESI+", "ESI-", "EI+", "EI-"],
             style="TMenubutton"
         )
-        option_menu.pack(side=tk.LEFT, **AppConfig.FunctionZone.FormulaGenerationPage.padding)
+        option_menu.pack(side=tk.LEFT, **AppUIConfig.FunctionZone.FormulaGenerationPage.padding)
         
         # m/z值输入框
         m2z_frame = create_input_frame(self.left_frame, "m/z值", 2)
         self.m2z = tk.DoubleVar(value=100)
-        entry = self.widget_factory.create_entry(m2z_frame, textvariable=self.m2z, **AppConfig.FunctionZone.FormulaGenerationPage.input_entry)
-        entry.pack(**AppConfig.FunctionZone.FormulaGenerationPage.padding)
+        entry = self.widget_factory.create_entry(m2z_frame, textvariable=self.m2z, **AppUIConfig.FunctionZone.FormulaGenerationPage.input_entry)
+        entry.pack(**AppUIConfig.FunctionZone.FormulaGenerationPage.padding)
         
         # 误差范围输入框
         error_frame = create_input_frame(self.left_frame, "误差范围 (%)", 3)
         self.error_pct = tk.DoubleVar(value=0.1)
-        entry = self.widget_factory.create_entry(error_frame, textvariable=self.error_pct, **AppConfig.FunctionZone.FormulaGenerationPage.input_entry)
-        entry.pack(**AppConfig.FunctionZone.FormulaGenerationPage.padding)
+        entry = self.widget_factory.create_entry(error_frame, textvariable=self.error_pct, **AppUIConfig.FunctionZone.FormulaGenerationPage.input_entry)
+        entry.pack(**AppUIConfig.FunctionZone.FormulaGenerationPage.padding)
         
         # 电荷数输入框
         charge_frame = create_input_frame(self.left_frame, "电荷数", 4)
         self.charge = tk.IntVar(value=1)
-        entry = self.widget_factory.create_entry(charge_frame, textvariable=self.charge, **AppConfig.FunctionZone.FormulaGenerationPage.input_entry)
-        entry.pack(**AppConfig.FunctionZone.FormulaGenerationPage.padding)
+        entry = self.widget_factory.create_entry(charge_frame, textvariable=self.charge, **AppUIConfig.FunctionZone.FormulaGenerationPage.input_entry)
+        entry.pack(**AppUIConfig.FunctionZone.FormulaGenerationPage.padding)
 
         # 元素配置区优化
         elements = ["C", "N", "O", "S", "P", "Si", "F", "Cl", "Br", "I", "B", "Se"]
@@ -170,11 +171,11 @@ class FormulaGenerationPage(BasePage):
             label_col = col_in_row * 2
             entry_col = label_col + 1
 
-            element_label = self.widget_factory.create_label(self.elements_frame, text=f"{elem}:", **AppConfig.FunctionZone.FormulaGenerationPage.element_label)
-            element_label.grid(row=row, column=label_col, **AppConfig.FunctionZone.FormulaGenerationPage.padding,)
+            element_label = self.widget_factory.create_label(self.elements_frame, text=f"{elem}:", **AppUIConfig.FunctionZone.FormulaGenerationPage.element_label)
+            element_label.grid(row=row, column=label_col, **AppUIConfig.FunctionZone.FormulaGenerationPage.padding,)
             
-            entry = self.widget_factory.create_entry(self.elements_frame, textvariable=self.element_vars[elem], **AppConfig.FunctionZone.FormulaGenerationPage.element_entry)
-            entry.grid(row=row, column=entry_col, **AppConfig.FunctionZone.FormulaGenerationPage.padding)
+            entry = self.widget_factory.create_entry(self.elements_frame, textvariable=self.element_vars[elem], **AppUIConfig.FunctionZone.FormulaGenerationPage.element_entry)
+            entry.grid(row=row, column=entry_col, **AppUIConfig.FunctionZone.FormulaGenerationPage.padding)
 
     def _setup_right_frame(self):
         # 创建筛选栏容器
@@ -210,7 +211,7 @@ class FormulaGenerationPage(BasePage):
                     textvariable=var, 
                     width=width,
                 )
-                entry.pack(fill=tk.X, **AppConfig.FunctionZone.FormulaGenerationPage.padding)
+                entry.pack(fill=tk.X, **AppUIConfig.FunctionZone.FormulaGenerationPage.padding)
                 
                 self.filters[col_name] = var
 
@@ -518,4 +519,4 @@ class FormulaGenerationPage(BasePage):
         formula_str = ''.join(formula)
 
         # 发送事件
-        self.event_bus.publish(Event(AppConfig.EventName.add_formula, data=formula_str, priority=AppConfig.EventPriority.high))
+        self.event_mgr.publish(EventType.ADD_FORMULA, data=formula_str, priority=EventPriority.NORMAL)

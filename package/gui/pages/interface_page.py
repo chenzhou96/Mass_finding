@@ -1,10 +1,10 @@
 from .base_page import BasePage
 import tkinter as tk
-from ...config.config_temp import AppConfig
+from ...config.AppUI_config import AppUIConfig
 
 class InterfacePage(BasePage):
-    def __init__(self, parent, event_bus):
-        super().__init__(parent, event_bus, title="预留接口")
+    def __init__(self, parent, event_mgr, logger):
+        super().__init__(parent, event_mgr, logger, title="预留接口")
         tk.Label(
             self,
             text="功能暂未开放",

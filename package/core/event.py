@@ -1,32 +1,31 @@
 from collections import defaultdict
 from threading import Lock
 import logging
-from ..config.config_temp import AppConfig
+from ..config.AppUI_config import AppUIConfig
+from ..config.event_config import EventType, EventPriority
 
 class Event:
-    def __init__(self, event_type, data=None, priority=AppConfig.EventPriority.low):
+    def __init__(self, event_type, data=None, priority=EventPriority.LOW):
         self.event_type = event_type
         self.data = data
         self.priority = priority
 
-
 class EventListener:
-    def __init__(self, callback, priority=AppConfig.EventPriority.low, filter_func=None):
+    def __init__(self, callback, priority=EventPriority.LOW, filter_func=None):
         self.callback = callback
         self.priority = priority
         self.filter = filter_func  # 过滤条件函数
 
 class EventBus:
-    def __init__(self, logger):
+    def __init__(self):
         self._listeners = defaultdict(list)  # 存储 Listener 对象
         self._lock = Lock()
-        self.logger = logger
 
     def subscribe(
         self,
         event_type,
         callback,
-        priority=AppConfig.EventPriority.low,
+        priority=EventPriority.LOW,
         filter_func=None
     ):
         listener = EventListener(callback, priority, filter_func)
@@ -44,20 +43,25 @@ class EventBus:
                 try:
                     listener.callback(event)
                 except Exception as e:
-                    self.logger.error(f"事件 {event.event_type} 处理失败: {e}")
+                    print(f"事件 {event.event_type} 处理失败: {e}")  # 简化错误处理
 
-class EventRegistry:
-    def __init__(self, event_bus):
-        self.event_bus = event_bus
+class EventManager:
+    def __init__(self):
+        self.bus = EventBus()
 
-class EventLogHandler(logging.Handler):
-    def __init__(self, event_bus):
-        super().__init__()
-        self.event_bus = event_bus
-
-    def emit(self, record):
-        log_entry = self.format(record)
-        # 将日志消息发布到事件总线
-        self.event_bus.publish(
-            Event(AppConfig.EventName.log_message, data=log_entry)
+    def subscribe(self, event_type, callback, priority=EventPriority.NORMAL):
+        """外部订阅事件的接口"""
+        self.bus.subscribe(
+            event_type.value,
+            callback,
+            priority=priority.value
         )
+
+    def publish(self, event_type, data=None, priority=EventPriority.NORMAL):
+        """外部发布事件的接口"""
+        event = Event(
+            event_type.value,
+            data,
+            priority=priority.value
+        )
+        self.bus.publish(event)
