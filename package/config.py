@@ -2,7 +2,7 @@ import tkinter as tk
 
 class BaseConfig:
     # 版本号
-    VERSINO = '3.0'
+    VERSION = '3.0'
 
     # 窗口设置
     WINDOW_SIZE = '1280x800'
@@ -10,6 +10,7 @@ class BaseConfig:
     # 字体设置
     FONT_STYLE = '微软雅黑'
     FONT_SIZE = 10
+    FONT_SIZE_SMALL = 8
 
     # 极简风配色方案
     PRIMARY_COLOR = "#457B9D"   # 北欧蓝（品牌主色）
@@ -66,6 +67,12 @@ class BaseElement:
     }
 
     panedWindow = {
+        'bg': BaseConfig.BACKGROUND,
+        'bd': BaseConfig.BD_B,
+        'relief': tk.FLAT,
+    }
+
+    canvas = {
         'bg': BaseConfig.BACKGROUND,
         'bd': BaseConfig.BD_B,
         'relief': tk.FLAT,
@@ -129,7 +136,7 @@ class AppConfig:
 
     # 主窗口    
     class MainWindow:
-        TITLE = f"质谱数据分析工具 V{BaseConfig.VERSINO} - designed by zc"
+        TITLE = f"质谱数据分析工具 V{BaseConfig.VERSION} - designed by zc"
         ICO = "./package/icon.ico"
         ICNS = "./package/icon.icns"
         WINDOW_SIZE = BaseConfig.WINDOW_SIZE
@@ -188,9 +195,10 @@ class AppConfig:
         class LoggerZone:
             text = {
                 'fg': BaseConfig.TEXT_LIGHT,
+                'font': (BaseConfig.FONT_STYLE, BaseConfig.FONT_SIZE_SMALL)
             }
 
-            LOG_FORMAT = '%(asctime)s - [%(levelname)s] %(message)s'
+            LOG_FORMAT = '%(asctime)s [%(levelname)s]\n%(message)s'
             DATE_FORMAT = '%Y-%m-%d %H:%M:%S'
 
     # 主页面左侧的功能区域
@@ -217,6 +225,10 @@ class AppConfig:
                 'pady': BaseConfig.PADDING_A,
             }
 
+            canvas = {
+                'width': 150,
+            }
+
             option_menu = {
                 'background': BaseConfig.THIRD_COLOR,
                 'foreground': BaseConfig.TEXT_DARK,
@@ -234,8 +246,31 @@ class AppConfig:
 
             output_frame = {}
 
+    class EventName:
+        page_switch = 'page_switch'
+        log_message = 'log_message'
+        add_formula = 'add_formula'
 
-EVENT_TYPES = {
-    'PAGE_SWITCH': 'page_switch',
-    'LOG_MESSAGE': 'log_message',
-}
+    class EventPriority:
+        low = 0
+        normal = 1
+        high = 2
+        crtitical = 3
+
+    class NavigationName:
+        page0 = {
+            'chinese': '空白页',
+            'english': 'BlankPage',
+        }
+        page1 = {
+            'chinese': '分子式生成',
+            'english': 'FormulaGenerationPage',
+        }
+        page2 = {
+            'chinese': '分子式检索',
+            'english': 'FormulaSearchPage',
+        }
+        page_undefined = {
+            'chinese': '预留接口',
+            'english': 'Interface',
+        }

@@ -245,6 +245,8 @@ class FormulaGenerationPage(BasePage):
         for var in self.filters.values():
             var.trace_add("write", self._apply_filters)
 
+        self.table.bind("<Double-1>", self._on_table_double_click)
+
     def _update_hidden_columns(self):
         visible_cols = ["M/Z", "Adduct", "Mol Weight", "DBR"]
         for col in self.table["columns"]:
@@ -483,7 +485,7 @@ class FormulaGenerationPage(BasePage):
             if valid:
                 # 按列顺序插入数据
                 values = [item[col] for col in self.table["columns"]]
-                self.table.insert("", "end", values=values)
+                self.table.insert("", "end", values=values, tags=(json.dumps(item),))
 
     def on_window_resize(self, event):
         # 动态调整元素配置区高度
@@ -491,3 +493,29 @@ class FormulaGenerationPage(BasePage):
             self.elements_frame.config(
                 height=int(event.height * 0.3)
             )
+
+    def _on_table_double_click(self, event):
+        item = self.table.selection()
+        if not item:
+            return
+        item = item[0]
+        tags = self.table.item(item, 'tags')
+        if not tags:
+            return
+        try:
+            data = json.loads(tags[0])
+        except Exception as e:
+            logging.error(f"无法解析数据项: {e}")
+            return
+
+        # 提取元素生成化学式
+        elements_order = ['C', 'H', 'N', 'O', 'S', 'P', 'Si', 'F', 'Cl', 'Br', 'I', 'B', 'Se']
+        formula = []
+        for elem in elements_order:
+            count = data.get(elem, '0')
+            if count != 0:
+                formula.append(f"{elem}{count}")
+        formula_str = ''.join(formula)
+
+        # 发送事件
+        self.event_bus.publish(Event(AppConfig.EventName.add_formula, data=formula_str, priority=AppConfig.EventPriority.high))

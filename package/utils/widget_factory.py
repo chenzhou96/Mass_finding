@@ -17,6 +17,12 @@ class WidgetFactory:
         label_style.update(kwargs)
         return tk.LabelFrame(parent, text=text, **label_style)
     
+    def create_canvas(self, parent, **kwargs):
+        """创建标准画布"""
+        canvas_style = BaseElement.canvas
+        canvas_style.update(kwargs)
+        return tk.Canvas(parent, **canvas_style)
+    
     def create_toplevel(self, parent, **kwargs):
         """创建标准顶层窗口"""
         toplevel_style = BaseElement.toplevel
@@ -71,12 +77,14 @@ class WidgetFactory:
             **checkbutton_style
         )
 
-    def create_scrollable_text(self, parent):
+    def create_scrollable_text(self, parent, **kwargs):
         """创建带滚动条的文本框"""
+        text_style = BaseElement.text
+        text_style.update(kwargs)
         text_widget = tk.Text(
             parent,
             wrap=tk.CHAR,
-            **AppConfig.InteractiveZone.LoggerZone.text
+            **text_style
         )
         scrollbar = tk.Scrollbar(parent, command=text_widget.yview)
         text_widget.config(yscrollcommand=scrollbar.set)
