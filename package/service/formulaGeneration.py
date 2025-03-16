@@ -3,9 +3,10 @@ import time
 import logging
 import concurrent.futures
 from concurrent.futures import ProcessPoolExecutor
-from ..back_end.public import ExporterFactory
+from ..service.public import ExporterFactory
 from pathlib import Path
-from ..back_end.public import ConfigManager
+from ..service.public import ReadChemElementConfig
+from ..config.path_config import CHEM_ELEMENTS_CONFIG_PATH
 
 # ---------------------------- 类定义 ----------------------------
 class ChemicalFormula:
@@ -135,12 +136,8 @@ def backtrack_search(target_mw: float, tolerance: float, elements: list, atomic_
 # ---------------------------- 入口函数 ----------------------------
 def start_analysis(input_data: dict) -> dict:
     try:
-        script_dir = Path(__file__).resolve().parent
-        config_path = script_dir.joinpath('config.json')
-
         # 加载配置
-        config_manager = ConfigManager(config_path)
-
+        config_manager = ReadChemElementConfig(CHEM_ELEMENTS_CONFIG_PATH)
 
         ms_mode = input_data["ms_mode"]
         m2z = float(input_data["m2z"])

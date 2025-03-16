@@ -1,5 +1,5 @@
 import tkinter as tk
-from ..core.event import Event
+from ...core.event import Event
 
 class StatusBar(tk.Frame):
     def __init__(self, parent, widget_factory, event_bus=None):

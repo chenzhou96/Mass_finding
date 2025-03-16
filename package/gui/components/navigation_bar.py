@@ -1,7 +1,7 @@
 import tkinter as tk
-from ..config import AppConfig
-from ..core.event import Event
-from ..utils.logger import Logger
+from ...config.config_temp import AppConfig
+from ...core.event import Event
+from ...utils.logger import Logger
 
 class NavigationBar(tk.Frame):
     def __init__(self, parent, page_factory, widget_factory):

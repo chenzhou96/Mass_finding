@@ -229,7 +229,7 @@ class ExporterFactory:
         return exporters.get(format_type, None)
 
 # --------------------------   配置文件管理器   --------------------------
-class ConfigValidator:
+class ChemElementConfigValidator:
     @staticmethod
     def validate_keys(config, required_keys):
         if not all(k in config for k in required_keys):
@@ -248,7 +248,7 @@ class ConfigValidator:
             if not isinstance(adduct_dict, dict) or not all(ion in ion_weights for ion in adduct_dict.values()):
                 raise ValueError(f"Invalid adducts format for mode {mode}")
 
-class ConfigManager:
+class ReadChemElementConfig:
     def __init__(self, config_path: Path):
         self.config = self.load_config(config_path)
         self.validate_config()
@@ -260,9 +260,9 @@ class ConfigManager:
             return json.load(f)
 
     def validate_config(self):
-        ConfigValidator.validate_keys(self.config, {'atomic_weights', 'ion_weights', 'adducts', 'element_categories'})
-        ConfigValidator.validate_atomic_weights(self.config['atomic_weights'])
-        ConfigValidator.validate_adducts(self.config['adducts'], self.config['ion_weights'])
+        ChemElementConfigValidator.validate_keys(self.config, {'atomic_weights', 'ion_weights', 'adducts', 'element_categories'})
+        ChemElementConfigValidator.validate_atomic_weights(self.config['atomic_weights'])
+        ChemElementConfigValidator.validate_adducts(self.config['adducts'], self.config['ion_weights'])
 
 # 示例调用
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 from collections import defaultdict
 from threading import Lock
 import logging
-from ..config import AppConfig
+from ..config.config_temp import AppConfig
 
 class Event:
     def __init__(self, event_type, data=None, priority=AppConfig.EventPriority.low):

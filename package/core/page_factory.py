@@ -1,7 +1,7 @@
-from ..pages.formula_generation_page import FormulaGenerationPage
-from ..pages.formula_search_page import FormulaSearchPage
-from ..pages.blank_page import BlankPage
-from ..pages.interface_page import InterfacePage
+from ..gui.pages.formula_generation_page import FormulaGenerationPage
+from ..gui.pages.formula_search_page import FormulaSearchPage
+from ..gui.pages.blank_page import BlankPage
+from ..gui.pages.interface_page import InterfacePage
 import logging
 
 class PageFactory:

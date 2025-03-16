@@ -1,12 +1,13 @@
 import tkinter as tk
 from tkinter import ttk, filedialog
 from .base_page import BasePage
-from ..core.event import EventBus, Event
-from ..core.thread_pool import ThreadPool
-from ..back_end.formulaGeneration import start_analysis
-from ..utils.data_validator import DataValidator
-from ..utils.widget_factory import WidgetFactory
-from ..config import AppConfig
+from ...core.event import EventBus, Event
+from ...core.thread_pool import ThreadPool
+from ...service.formulaGeneration import start_analysis
+from ...utils.data_validator import DataValidator
+from ...utils.widget_factory import WidgetFactory
+from ...config.config_temp import AppConfig
+from ...config.path_config import CHEM_ELEMENTS_CONFIG_PATH
 import logging
 import json
 from pathlib import Path
@@ -52,8 +53,7 @@ class FormulaGenerationPage(BasePage):
         self.bind("<Configure>", self.on_window_resize)
 
     def _get_adduct_config(self):
-        config_path = Path(__file__).parent.parent / "back_end/config.json"
-        with open(config_path, "r", encoding="utf-8") as f:
+        with open(CHEM_ELEMENTS_CONFIG_PATH, "r", encoding="utf-8") as f:
             config_data = json.load(f)
             adducts_config = config_data["adducts"]
         return {

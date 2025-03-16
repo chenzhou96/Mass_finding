@@ -1,4 +1,4 @@
-from ..config import AppConfig, BaseElement
+from ..config.config_temp import AppConfig, BaseElement
 import tkinter as tk
 
 class WidgetFactory:

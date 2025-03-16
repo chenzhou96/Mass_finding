@@ -1,6 +1,6 @@
 from .base_page import BasePage
 import tkinter as tk
-from ..config import AppConfig
+from ...config.config_temp import AppConfig
 
 class InterfacePage(BasePage):
     def __init__(self, parent, event_bus):

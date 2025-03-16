@@ -1,6 +1,6 @@
 import logging
 import tkinter as tk
-from ..config import AppConfig
+from ..config.config_temp import AppConfig
 from ..core.event import EventLogHandler
 from ..utils.widget_factory import WidgetFactory
 

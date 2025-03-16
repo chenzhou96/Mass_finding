@@ -1,14 +1,15 @@
 import tkinter as tk
 from tkinter import ttk
 from .components.navigation_bar import NavigationBar
-from .utils.logger import Logger
-from .core.event import EventBus
-from .config import AppConfig
-from .core.page_factory import PageFactory
+from ..utils.logger import Logger
+from ..core.event import EventBus
+from ..config.config_temp import AppConfig
+from ..core.page_factory import PageFactory
 from .components.status_bar import StatusBar
-from .utils.widget_factory import WidgetFactory
+from ..utils.widget_factory import WidgetFactory
 import platform
 from PIL import Image, ImageTk
+from ..config.path_config import IC0_PATH, ICNS_PATH
 
 class APP(tk.Tk):
     def __init__(self):
@@ -25,10 +26,10 @@ class APP(tk.Tk):
 
         # 动态设置图标
         if system == "Windows":
-            self.iconbitmap(AppConfig.MainWindow.ICO)
+            self.iconbitmap(IC0_PATH)
         elif system == "Darwin":  # macOS
             # 需要通过PhotoImage加载ICNS
-            image = Image.open(AppConfig.MainWindow.ICNS)
+            image = Image.open(ICNS_PATH)
             icon = ImageTk.PhotoImage(image)
             self.iconphoto(True, icon)  # macOS推荐使用iconphoto
         else:
