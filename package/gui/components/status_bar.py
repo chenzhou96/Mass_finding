@@ -3,8 +3,8 @@ from ...config.AppUI_config import AppUIConfig
 from ...config.event_config import EventType, EventPriority
 
 class StatusBar(tk.Frame):
-    def __init__(self, parent, widget_factory, event_mgr):
-        super().__init__(parent)
+    def __init__(self, frame, widget_factory, event_mgr):
+        super().__init__(frame, **AppUIConfig.StatusBar.frame)
         if not event_mgr:
             raise ValueError("必须传入有效的Event Manager实例")
         self.event_mgr = event_mgr

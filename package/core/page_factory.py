@@ -24,6 +24,9 @@ class PageFactory:
 
             self._instances = {}
 
+    def set_root(self, root):
+        self.root = root
+
     def get_page(self, page_name):
         page_class = self.page_classes.get(page_name)
         if not page_class:

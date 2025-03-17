@@ -26,7 +26,7 @@ class WidgetConfig:
         'relief': tk.FLAT,
     }
 
-    panedWindow = {
+    panedwindow = {
         'bg': BaseConfig.BACKGROUND,
         'bd': BaseConfig.BD_B,
         'relief': tk.FLAT,
@@ -38,10 +38,13 @@ class WidgetConfig:
         'relief': tk.FLAT,
     }
 
-    scrolledWindow = {
+    scrolledwindow = {
         'bg': BaseConfig.BACKGROUND,
-        'bd': BaseConfig.BD_B,
+        'bd': BaseConfig.BD_A,
         'relief': tk.SUNKEN,
+        'troughcolor': BaseConfig.BACKGROUND,
+        'highlightthickness': 0,
+        'width': 0,
     }
 
     button = {
@@ -54,6 +57,8 @@ class WidgetConfig:
         'font': (BaseConfig.FONT_STYLE, BaseConfig.FONT_SIZE),
         'padx': BaseConfig.PADDING_A,
         'pady': BaseConfig.PADDING_A,
+        'highlightthickness': 0,
+        'highlightbackground': BaseConfig.BACKGROUND,
     }
 
     entry = {
@@ -63,6 +68,8 @@ class WidgetConfig:
         'relief': tk.SUNKEN,
         'insertbackground': BaseConfig.TEXT_DARK,
         'font': (BaseConfig.FONT_STYLE, BaseConfig.FONT_SIZE),
+        'highlightthickness': 0.5,
+        'highlightbackground': BaseConfig.SECONDARY_COLOR,
     }
 
     label = {
@@ -79,6 +86,8 @@ class WidgetConfig:
         'bd': BaseConfig.BD_A,
         'relief': tk.SUNKEN,
         'font': (BaseConfig.FONT_STYLE, BaseConfig.FONT_SIZE),
+        'highlightthickness': 0.5,
+        'highlightbackground': BaseConfig.SECONDARY_COLOR,
     }
 
     checkbutton = {

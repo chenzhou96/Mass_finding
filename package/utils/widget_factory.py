@@ -31,13 +31,13 @@ class WidgetFactory:
     
     def create_paned_window(self, parent, **kwargs):
         """创建标准分割窗口"""
-        paned_window_style = WidgetConfig.panedWindow
+        paned_window_style = WidgetConfig.panedwindow
         paned_window_style.update(kwargs)
         return tk.PanedWindow(parent, **paned_window_style)
     
     def create_scrolled_window(self, parent, **kwargs):
         """创建带滚动条的框架"""
-        scrolled_window_style = WidgetConfig.scrolledWindow
+        scrolled_window_style = WidgetConfig.scrolledwindow
         scrolled_window_style.update(kwargs)
         return tk.Scrollbar(parent, **scrolled_window_style)
 
@@ -86,7 +86,7 @@ class WidgetFactory:
             wrap=tk.CHAR,
             **text_style
         )
-        scrollbar = tk.Scrollbar(parent, command=text_widget.yview)
+        scrollbar = tk.Scrollbar(parent, command=text_widget.yview, **WidgetConfig.scrolledwindow)
         text_widget.config(yscrollcommand=scrollbar.set)
         return {
             "text": text_widget,

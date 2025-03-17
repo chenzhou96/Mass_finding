@@ -4,8 +4,8 @@ from ...core.event import EventType, EventPriority
 from ...utils.logger import Logger
 
 class NavigationBar(tk.Frame):
-    def __init__(self, parent, page_factory, widget_factory):
-        super().__init__(parent, **AppUIConfig.NavigationBar.frame)
+    def __init__(self, parent, frame, page_factory, widget_factory):
+        super().__init__(frame, **AppUIConfig.NavigationBar.frame)
         self.page_factory = page_factory
         self.widget_factory = widget_factory
         self.event_mgr = parent.event_mgr  # 从父级（APP）获取 event_mgr

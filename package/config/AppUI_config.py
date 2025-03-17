@@ -12,6 +12,12 @@ class AppUIConfig:
         WINDOW_SIZE = BaseConfig.WINDOW_SIZE
         BG_COLOR = BaseConfig.BACKGROUND
 
+        frame = {
+            'bg': BaseConfig.BACKGROUND,
+            'bd': BaseConfig.BD_B,
+            'relief': tk.FLAT,
+        }
+
     # 导航栏
     class NavigationBar:
         frame = {
@@ -42,9 +48,21 @@ class AppUIConfig:
 
     # 状态栏
     class StatusBar:
-        frame = {}
+        frame = {
+            **WidgetConfig.frame,
+        }
 
         text = {}
+
+        padding = {
+            'padx': BaseConfig.PADDING_A,
+            'pady': BaseConfig.PADDING_A,
+        }
+
+        label = {
+            'fg': BaseConfig.TEXT_LIGHT,
+            'font': (BaseConfig.FONT_STYLE, BaseConfig.FONT_SIZE_SMALL)
+        }
 
     # 主页面右侧的交互区域
     class InteractiveZone:
@@ -131,10 +149,4 @@ class AppUIConfig:
         page_undefined = {
             'chinese': '预留接口',
             'english': 'Interface',
-        }
-
-    class StatusBar:
-        label = {
-            'fg': BaseConfig.TEXT_LIGHT,
-            'font': (BaseConfig.FONT_STYLE, BaseConfig.FONT_SIZE_SMALL)
         }

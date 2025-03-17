@@ -57,20 +57,25 @@ class APP(tk.Tk):
         self._create_navigation_bar()
         self._create_status_bar()
 
-    def _create_navigation_bar(self):
-        self.nav_bar = NavigationBar(
-            self,
-            self.page_factory,
-            self.widget_factory
-        )
-
     def _create_layout_containers(self):
-        self.left_frame = self.widget_factory.create_frame(
+        self.nav_frame = self.widget_factory.create_frame(
             self,
+            **AppUIConfig.NavigationBar.frame
+        )
+        self.mid_frame = self.widget_factory.create_frame(
+            self,
+            **AppUIConfig.MainWindow.frame
+        )
+        self.status_frame = self.widget_factory.create_frame(
+            self,
+            **AppUIConfig.StatusBar.frame
+        )
+        self.left_frame = self.widget_factory.create_frame(
+            self.mid_frame,
             **AppUIConfig.FunctionZone.frame
         )
         self.right_frame = self.widget_factory.create_frame(
-            self,
+            self.mid_frame,
             **AppUIConfig.InteractiveZone.frame
         )
         self.upper_frame = self.widget_factory.create_labelframe(
@@ -83,24 +88,48 @@ class APP(tk.Tk):
             text='操作日志',
             **AppUIConfig.FunctionZone.frame
         )
+        self.page_factory.set_root(self.left_frame)
+
+    def _create_navigation_bar(self):
+        self.nav_bar = NavigationBar(
+            self,
+            self.nav_frame,
+            self.page_factory,
+            self.widget_factory
+        )
 
     def _create_status_bar(self):
         self.status_bar = StatusBar(
-            self.left_frame,
+            self.status_frame,
             widget_factory=self.widget_factory,
             event_mgr=self.event_mgr
         )
-        self.status_bar.pack(
-            side=tk.BOTTOM,
-            fill=tk.X,
-        )
 
     def _setup_layout(self):
+        self.nav_frame.pack(
+            side=tk.TOP,
+            fill=tk.X,
+            **AppUIConfig.NavigationBar.padding
+        )
+        self.mid_frame.pack(
+            side=tk.TOP,
+            fill=tk.BOTH,
+            expand=True,
+        )
+        self.status_frame.pack(
+            side=tk.BOTTOM,
+            fill=tk.X,
+            **AppUIConfig.StatusBar.padding
+        )
         # 导航栏布局
         self.nav_bar.pack(
             side=tk.TOP,
             fill=tk.X,
-            **AppUIConfig.NavigationBar.padding
+        )
+        # 状态栏布局
+        self.status_bar.pack(
+            side=tk.BOTTOM,
+            fill=tk.X,
         )
         # 右侧主容器
         self.right_frame.pack(
