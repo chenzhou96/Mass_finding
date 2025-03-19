@@ -1,24 +1,22 @@
 import tkinter as tk
 from tkinter import ttk, filedialog
 from .base_page import BasePage
-from ...core.event import Event
 from ...core.thread_pool import ThreadPool
 from ...service.formulaGeneration import start_analysis
 from ...utils.data_validator import DataValidator
 from ...utils.widget_factory import WidgetFactory
 from ...config.AppUI_config import AppUIConfig
 from ...config.event_config import EventType, EventPriority
-from ...config.path_config import CHEM_ELEMENTS_CONFIG_PATH
+from ...config.path_config import PathManager
 import logging
 import json
-from pathlib import Path
 import tkinter.font as tkFont
 import re
 
 class FormulaGenerationPage(BasePage):
 
-    def __init__(self, parent, event_mgr, logger):
-        super().__init__(parent, event_mgr, logger, title="Formula Generation")
+    def __init__(self, parent, event_mgr):
+        super().__init__(parent, event_mgr, title="Formula Generation")
         self.widget_factory = WidgetFactory()
         self.left_frame = self.widget_factory.create_frame(self, **AppUIConfig.FunctionZone.FormulaGenerationPage.input_frame)
         self.right_frame = self.widget_factory.create_frame(self, **AppUIConfig.FunctionZone.FormulaGenerationPage.output_frame)
@@ -54,7 +52,7 @@ class FormulaGenerationPage(BasePage):
         self.bind("<Configure>", self.on_window_resize)
 
     def _get_adduct_config(self):
-        with open(CHEM_ELEMENTS_CONFIG_PATH, "r", encoding="utf-8") as f:
+        with open(PathManager().chem_element_config_path, "r", encoding="utf-8") as f:
             config_data = json.load(f)
             adducts_config = config_data["adducts"]
         return {
@@ -310,6 +308,28 @@ class FormulaGenerationPage(BasePage):
                 self._apply_filters()
                 self.auto_resize_columns()
                 self._update_hidden_columns()
+
+                # 分离不限和有限的元素
+                elements = data["input_params"]["elements"]
+                unlimited_elements = [elem for elem, count in elements.items() if count == -1]
+                limited_elements = [f"{elem}<={count}个" for elem, count in elements.items() if count > 0]
+
+                # 构建元素配置字符串
+                element_config_parts = []
+                if unlimited_elements:
+                    element_config_parts.append(f"{', '.join(unlimited_elements)}不限个数")
+                if limited_elements:
+                    element_config_parts.append(', '.join(limited_elements))
+
+                element_config_str = '; '.join(element_config_parts)
+
+                logging.info("文件导入成功，参数如下:")
+                logging.info(f"- 质谱模式: {data['input_params']['ms_mode']}")
+                logging.info(f"- 加合离子: {', '.join(data['input_params']['adduct_model'])}")
+                logging.info(f"- m/z: {data['input_params']['m2z']}")
+                logging.info(f"- 误差范围: ±{data['input_params']['error_pct']}%")
+                logging.info(f"- 电荷数: {data['input_params']['charge']}")
+                logging.info(f"- 元素配置: {element_config_str}")
                 
             except json.JSONDecodeError as je:
                 logging.error(f"JSON解析失败: {str(je)}")
@@ -370,6 +390,8 @@ class FormulaGenerationPage(BasePage):
         
         # 6. 重置隐藏列
         self._update_hidden_columns()
+
+        logging.debug("页面已刷新")
 
     def _run_analysis(self):
         params = {
@@ -453,7 +475,7 @@ class FormulaGenerationPage(BasePage):
                         break
                 else:
                     # 解析数值条件
-                    parts = re.findall(r'-?\d+\.?\d*', filter_val)  # 提取所有数字
+                    parts = re.findall(r'\d+\.?\d*', filter_val)  # 提取所有数字
                     if not parts:
                         continue  # 无效输入时跳过
                     
@@ -515,8 +537,12 @@ class FormulaGenerationPage(BasePage):
         for elem in elements_order:
             count = data.get(elem, '0')
             if count != 0:
-                formula.append(f"{elem}{count}")
+                if count == 1:
+                    formula.append(f'{elem}')
+                else:
+                    formula.append(f"{elem}{count}")
         formula_str = ''.join(formula)
 
         # 发送事件
         self.event_mgr.publish(EventType.ADD_FORMULA, data=formula_str, priority=EventPriority.NORMAL)
+        logging.info(f"添加 {formula_str} 为感兴趣的分子式")

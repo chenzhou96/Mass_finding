@@ -1,7 +1,7 @@
 import tkinter as tk
-from tkinter import ttk
+import logging
 from .components.navigation_bar import NavigationBar
-from ..utils.logger import Logger
+from ..utils.logger import Logger, EventLogHandler
 from ..core.event import EventManager
 from ..config.AppUI_config import AppUIConfig
 from ..config.event_config import EventType, EventPriority
@@ -10,18 +10,22 @@ from .components.status_bar import StatusBar
 from ..utils.widget_factory import WidgetFactory
 import platform
 from PIL import Image, ImageTk
-from ..config.path_config import IC0_PATH, ICNS_PATH
+from ..config.path_config import PathManager
 
 class APP(tk.Tk):
     def __init__(self):
         self.current_page = None
+        self.path_manager = PathManager()
         self._init_window()
         self._init_components()
         self._setup_layout()
         self._init_event_handlers()
+        self._init_global_logger()
         self._setup_initial_page()
-        self._init_formula_bus()
-        self._init_logger()
+
+        # 发布初始化完成日志
+        logging.info("应用初始化完成")
+        self.status_bar.set_status_text("就绪")
 
     def _init_window(self):
         super().__init__()
@@ -33,9 +37,9 @@ class APP(tk.Tk):
     def _set_icon(self):
         system = platform.system()
         if system == "Windows":
-            self.iconbitmap(IC0_PATH)
+            self.iconbitmap(self.path_manager.ico_path)
         elif system == "Darwin":
-            image = Image.open(ICNS_PATH)
+            image = Image.open(self.path_manager.icns_path)
             icon = ImageTk.PhotoImage(image)
             self.iconphoto(True, icon)
 
@@ -53,9 +57,12 @@ class APP(tk.Tk):
         )
         # 4. 创建布局容器
         self._create_layout_containers()
-        # 5. 初始化导航栏和状态栏
+        # 5. 初始化导航栏，状态栏，元素区域
         self._create_navigation_bar()
         self._create_status_bar()
+        self._init_formula_bus()
+        # 6. 初始化日志器
+        self._init_logger()
 
     def _create_layout_containers(self):
         self.nav_frame = self.widget_factory.create_frame(
@@ -104,6 +111,25 @@ class APP(tk.Tk):
             widget_factory=self.widget_factory,
             event_mgr=self.event_mgr
         )
+
+    def _init_formula_bus(self):
+        # 上部信息区组件（分子式显示）
+        self.upper_info = self.widget_factory.create_scrollable_text(self.upper_frame)
+        self.upper_info["scrollbar"].pack(side=tk.RIGHT, fill=tk.Y)
+        self.upper_info["text"].pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+    def _init_logger(self):
+        """配置日志 UI 组件"""
+        scrollable_text = self.widget_factory.create_scrollable_text(
+            self.lower_frame,
+            **AppUIConfig.InteractiveZone.LoggerZone.text
+        )
+        self.log_text = scrollable_text["text"]
+        # 将日志文本框关联到已存在的 Logger 实例
+        self.logger.text_widget = self.log_text
+
+        scrollable_text["scrollbar"].pack(side=tk.RIGHT, fill=tk.Y)
+        self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
     def _setup_layout(self):
         self.nav_frame.pack(
@@ -164,31 +190,15 @@ class APP(tk.Tk):
             priority=EventPriority.NORMAL
         )
 
+    def _init_global_logger(self):
+        """配置全局日志，将日志同时写入文件和事件总线"""
+        event_handler = EventLogHandler(self.event_mgr)  # 传递事件总线
+        root_logger = logging.getLogger()
+        root_logger.addHandler(event_handler)
+
     def _setup_initial_page(self):
         initial_page = self.page_factory.get_page('BlankPage')
         self.show_page(initial_page)
-
-    def _init_formula_bus(self):
-        # 上部信息区组件（分子式显示）
-        self.upper_info = self.widget_factory.create_scrollable_text(self.upper_frame)
-        self.upper_info["scrollbar"].pack(side=tk.RIGHT, fill=tk.Y)
-        self.upper_info["text"].pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-    def _init_logger(self):
-        """配置日志 UI 组件"""
-        scrollable_text = self.widget_factory.create_scrollable_text(
-            self.lower_frame,
-            **AppUIConfig.InteractiveZone.LoggerZone.text
-        )
-        self.log_text = scrollable_text["text"]
-        # 将日志文本框关联到已存在的 Logger 实例
-        self.logger.text_widget = self.log_text
-
-        scrollable_text["scrollbar"].pack(side=tk.RIGHT, fill=tk.Y)
-        self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-
-        # 发布初始化完成日志
-        self.logger.info("应用初始化完成")
 
     def show_page(self, page):
         if page is None or page == self.current_page:

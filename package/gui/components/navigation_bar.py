@@ -1,7 +1,7 @@
 import tkinter as tk
+import logging
 from ...config.AppUI_config import AppUIConfig
 from ...core.event import EventType, EventPriority
-from ...utils.logger import Logger
 
 class NavigationBar(tk.Frame):
     def __init__(self, parent, frame, page_factory, widget_factory):
@@ -9,7 +9,6 @@ class NavigationBar(tk.Frame):
         self.page_factory = page_factory
         self.widget_factory = widget_factory
         self.event_mgr = parent.event_mgr  # 从父级（APP）获取 event_mgr
-        self.logger = parent.logger       # 从父级（APP）获取 logger
 
         self.active_button = None
         self.buttons = {}
@@ -45,7 +44,7 @@ class NavigationBar(tk.Frame):
         if self.page_factory:
             page = self.page_factory.get_page(page_name)
             if page and page != self.winfo_toplevel().current_page:
-                # 1. 发布事件（使用优化后的事件类型）
+                # 1. 发布事件
                 self.event_mgr.publish(
                     EventType.PAGE_SWITCH,
                     data={'new_page': page_name}
@@ -66,4 +65,4 @@ class NavigationBar(tk.Frame):
                 self.winfo_toplevel().show_page(page)
                 
         # 使用优化后的 Logger 记录日志
-        self.logger.info(f"切换到页面: {page_name_chinese}")
+        logging.info(f"切换到页面: {page_name_chinese}")

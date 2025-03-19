@@ -1,7 +1,10 @@
 import logging
 import tkinter as tk
+import datetime
+import os
 from ..config.AppUI_config import AppUIConfig
 from ..core.event import Event, EventPriority, EventType
+from ..config.path_config import PathManager
 
 class Logger:
     def __init__(self, event_bus, text_widget=None):
@@ -19,8 +22,12 @@ class Logger:
     def _configure_logging(self):
         """仅配置文件处理器"""
         # 1. 创建文件处理器
+        timestamp = datetime.datetime.now().strftime("%Y%m%d")
+        path_manager = PathManager()
+        path_manager.get_mass_finding_cache_path()
+        logfile_path = os.path.join(path_manager.get_logger_cache_path(), f"{timestamp}_app.log")
         file_handler = logging.FileHandler(
-            filename='app.log',
+            filename=str(logfile_path),
             mode='a',
             encoding='utf-8',
             delay=False
@@ -91,4 +98,18 @@ class Logger:
                 data=formatted_message,
                 priority=EventPriority.CRITICAL.value
             )
+        )
+
+class EventLogHandler(logging.Handler):
+    def __init__(self, event_bus):
+        super().__init__()
+        self.event_bus = event_bus
+
+    def emit(self, record):
+        log_message = self.format(record)
+        # 将日志消息发布到事件总线
+        self.event_bus.publish(
+            EventType.LOG_MESSAGE,
+            data=log_message,
+            priority=EventPriority.NORMAL
         )

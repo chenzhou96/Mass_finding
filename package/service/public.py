@@ -1,75 +1,20 @@
-# 版本
-VERSION = "3.0.0"
-
 import os
-import platform
 import logging
 import datetime
 import csv
 import json
 from pathlib import Path
-
-# 根据操作系统类型选择合适的注册表处理方式
-if platform.system() == "Windows":
-    import winreg
-
-# ----------------------------   路径管理器   ----------------------------
-class PathManager:
-    @staticmethod
-    def _get_desktop_path() -> str:
-        system = platform.system()
-        if system == "Windows":
-            try:
-                with winreg.OpenKey(
-                    winreg.HKEY_CURRENT_USER,
-                    r'Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders'
-                ) as key:
-                    desktop_path, _ = winreg.QueryValueEx(key, 'Desktop')
-                    expanded_path = os.path.expandvars(desktop_path)
-                    return expanded_path
-            except (OSError, Exception) as e:
-                logging.warning(f"Failed to access registry: {e}")
-                # 回退到环境变量获取
-                user_profile = os.environ.get('USERPROFILE', None)
-                if user_profile:
-                    fallback_path = os.path.join(user_profile, 'Desktop')
-                    logging.info(f"Falling back to environment variable USERPROFILE: {fallback_path}")
-                    return fallback_path
-                else:
-                    logging.error("USERPROFILE environment variable is not set.")
-                    raise EnvironmentError("USERPROFILE environment variable is not set.")
-        elif system in ["Darwin", "Linux"]:
-            # 对于 macOS 和 Linux，尝试从 HOME 环境变量构建路径
-            home = os.environ.get('HOME', None)
-            if home:
-                return os.path.join(home, 'Desktop')
-            else:
-                logging.error("HOME environment variable is not set.")
-                raise EnvironmentError("HOME environment variable is not set.")
-        else:
-            raise NotImplementedError(f"Unsupported operating system: {system}")
-
-    @staticmethod
-    def get_mass_finding_cache_path() -> str:
-        desktop_path = PathManager._get_desktop_path()
-        cache_folder_path = os.path.join(desktop_path, 'mass_finding_cache')
-        
-        try:
-            if not os.path.exists(cache_folder_path):
-                os.makedirs(cache_folder_path)
-                logging.info(f"No mass_finding_cache folder, successfully created folder: {cache_folder_path}")
-            return cache_folder_path
-        except OSError as e:
-            logging.error(f"Failed to create mass_finding_cache folder: {e}")
-            raise EnvironmentError(f"Failed to create mass_finding_cache folder: {e}")
+from ..config.base_config import BaseConfig
+from ..config.path_config import PathManager
 
 # ----------------------------   导出器工厂   ----------------------------
 class CSVExporter_formulaGeneration:
     def export(self, results: dict):
         try:
-            file_path = PathManager.get_mass_finding_cache_path()
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            csv_path = os.path.join(file_path, f'mass_data_{timestamp}.csv')
+            path_manager = PathManager()
+            path_manager.get_mass_finding_cache_path()
+            csv_path = os.path.join(path_manager.get_formula_generation_cache_path(), f'mass_data_{timestamp}.csv')
 
             # 修改编码为 utf-8-sig 解决中文乱码
             with open(csv_path, 'w', newline='', encoding='utf-8') as f:
@@ -117,7 +62,7 @@ class CSVExporter_formulaGeneration:
                             f"{formula['predicted_mw']:.4f}"  # 新增分子量数据
                         ])
 
-            logging.debug(f"CSV 文件已成功导出: {csv_path}")
+            logging.info(f"CSV 文件已成功导出: {csv_path}")
         except Exception as e:
             logging.error(f"CSV 导出失败: {e}")
             raise
@@ -125,15 +70,16 @@ class CSVExporter_formulaGeneration:
 class JSONExporter_formulaGeneration:
     def export(self, results: dict):
         try:
-            file_path = PathManager.get_mass_finding_cache_path()
             timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            json_path = os.path.join(file_path, f'mass_data_{timestamp}.json')
+            path_manager = PathManager()
+            path_manager.get_mass_finding_cache_path()
+            json_path = os.path.join(path_manager.get_formula_generation_cache_path(), f'mass_data_{timestamp}.json')
 
             # 构建完整数据结构
             data_to_save = {
                 "metadata": {
                     "export_time": datetime.datetime.now().isoformat(),
-                    "software_version": VERSION,
+                    "software_version": BaseConfig.VERSION,
                 },
                 "input_params": results["input_params"],  # 使用完整输入参数
                 "results": []
@@ -155,7 +101,7 @@ class JSONExporter_formulaGeneration:
             with open(json_path, 'w', encoding='utf-8') as f:
                 json.dump(data_to_save, f, ensure_ascii=False, indent=4)
 
-            logging.debug(f"JSON 文件已成功导出: {json_path}")
+            logging.info(f"JSON 文件已成功导出: {json_path}")
 
             return data_to_save
         
@@ -193,7 +139,7 @@ class JSONExporter_formulaSearch_PubChem:
             data_to_save = {
                 "metadata": {
                     "export_time": datetime.datetime.now().isoformat(),
-                    "software_version": VERSION,
+                    "software_version": BaseConfig.VERSION,
                     "molecular_formula": molecular_formula,
                     "result_count": count,
                     "monoisotopic_mass": monoisotopic_mass,
@@ -203,12 +149,14 @@ class JSONExporter_formulaSearch_PubChem:
             }
 
             output_filename = f"formula_search_results_{molecular_formula}.json"
-            output_path = Path(PathManager.get_mass_finding_cache_path()) / output_filename
+            path_manager = PathManager()
+            path_manager.get_mass_finding_cache_path()
+            output_path = path_manager.get_formula_search_cache_path / output_filename
 
             with open(output_path, 'w', encoding='utf-8') as f:
                 json.dump(data_to_save, f, indent=4, ensure_ascii=False)
 
-            logging.debug(f"结果已保存到 {output_path}")
+            logging.info(f"结果已保存到 {output_path}")
             logging.info(f"化学式 {molecular_formula} 检索到 {count} 条信息")
 
             return data_to_save
@@ -266,4 +214,4 @@ class ReadChemElementConfig:
 
 # 示例调用
 if __name__ == "__main__":
-    print(PathManager.get_mass_finding_cache_path())
+    pass

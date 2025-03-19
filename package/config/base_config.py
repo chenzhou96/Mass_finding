@@ -1,6 +1,6 @@
 class BaseConfig:
     # 版本号
-    VERSION = '3.0'
+    VERSION = '3.0.0'
 
     # 窗口设置
     WINDOW_SIZE = '1280x800'
@@ -8,7 +8,7 @@ class BaseConfig:
     # 字体设置
     FONT_STYLE = '微软雅黑'
     FONT_SIZE = 10
-    FONT_SIZE_SMALL = 8
+    FONT_SIZE_SMALL = 9
 
     # 极简风配色方案
     PRIMARY_COLOR = "#457B9D"   # 北欧蓝（品牌主色）

@@ -4,9 +4,8 @@ import logging
 import concurrent.futures
 from concurrent.futures import ProcessPoolExecutor
 from ..service.public import ExporterFactory
-from pathlib import Path
 from ..service.public import ReadChemElementConfig
-from ..config.path_config import CHEM_ELEMENTS_CONFIG_PATH
+from ..config.path_config import PathManager
 
 # ---------------------------- 类定义 ----------------------------
 class ChemicalFormula:
@@ -137,7 +136,7 @@ def backtrack_search(target_mw: float, tolerance: float, elements: list, atomic_
 def start_analysis(input_data: dict) -> dict:
     try:
         # 加载配置
-        config_manager = ReadChemElementConfig(CHEM_ELEMENTS_CONFIG_PATH)
+        config_manager = ReadChemElementConfig(PathManager().chem_element_config_path)
 
         ms_mode = input_data["ms_mode"]
         m2z = float(input_data["m2z"])
@@ -182,12 +181,12 @@ def start_analysis(input_data: dict) -> dict:
         }
 
         logging.info(f"开始分析, 参数如下...")
-        logging.info(f"质谱模式: {ms_mode}")
-        logging.info(f"加合离子: {', '.join(selected_adducts)}")
-        logging.info(f"m/z: {m2z}")
-        logging.info(f"误差范围: ±{error * 100:.4f}%")
-        logging.info(f"电荷数: {charge}")
-        logging.info(f"元素配置: {element_config_str}")
+        logging.info(f"- 质谱模式: {ms_mode}")
+        logging.info(f"- 加合离子: {', '.join(selected_adducts)}")
+        logging.info(f"- m/z: {m2z}")
+        logging.info(f"- 误差范围: ±{error * 100:.4f}%")
+        logging.info(f"- 电荷数: {charge}")
+        logging.info(f"- 元素配置: {element_config_str}")
 
         p_elements = parse_elements(elements, config_manager.config['atomic_weights'])
 

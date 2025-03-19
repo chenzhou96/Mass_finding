@@ -49,7 +49,7 @@ class AppUIConfig:
     # 状态栏
     class StatusBar:
         frame = {
-            **WidgetConfig.frame,
+            'bg': BaseConfig.THIRD_COLOR,
         }
 
         text = {}
@@ -60,14 +60,16 @@ class AppUIConfig:
         }
 
         label = {
-            'fg': BaseConfig.TEXT_LIGHT,
-            'font': (BaseConfig.FONT_STYLE, BaseConfig.FONT_SIZE_SMALL)
+            'bg': BaseConfig.THIRD_COLOR,
+            'fg': BaseConfig.TEXT_DARK,
+            'font': (BaseConfig.FONT_STYLE, BaseConfig.FONT_SIZE_SMALL, 'bold')
         }
 
     # 主页面右侧的交互区域
     class InteractiveZone:
         frame = {
             'width': 200,
+            **WidgetConfig.frame,
         }
 
         padding = {
@@ -90,7 +92,9 @@ class AppUIConfig:
 
     # 主页面左侧的功能区域
     class FunctionZone:
-        frame = {}
+        frame = {
+            **WidgetConfig.frame,
+        }
 
         padding = {
             'padx': BaseConfig.PADDING_A,
