@@ -20,12 +20,14 @@ class APP(tk.Tk):
         self._init_components()
         self._setup_layout()
         self._init_event_handlers()
-        self._init_global_logger()
         self._setup_initial_page()
 
         # 发布初始化完成日志
         logging.info("应用初始化完成")
-        self.status_bar.set_status_text("就绪")
+        self.event_mgr.publish(
+            EventType.STATUS_UPDATE, 
+            data={"status_text": "done"}
+        )
 
     def _init_window(self):
         super().__init__()
@@ -88,12 +90,12 @@ class APP(tk.Tk):
         self.upper_frame = self.widget_factory.create_labelframe(
             self.right_frame,
             text='分子式 bus',
-            **AppUIConfig.FunctionZone.frame
+            **AppUIConfig.InteractiveZone.frame
         )
         self.lower_frame = self.widget_factory.create_labelframe(
             self.right_frame,
             text='操作日志',
-            **AppUIConfig.FunctionZone.frame
+            **AppUIConfig.InteractiveZone.frame
         )
         self.page_factory.set_root(self.left_frame)
 
@@ -127,6 +129,8 @@ class APP(tk.Tk):
         self.log_text = scrollable_text["text"]
         # 将日志文本框关联到已存在的 Logger 实例
         self.logger.text_widget = self.log_text
+        event_handler = EventLogHandler(self.event_mgr)
+        logging.getLogger().addHandler(event_handler)
 
         scrollable_text["scrollbar"].pack(side=tk.RIGHT, fill=tk.Y)
         self.log_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -170,11 +174,13 @@ class APP(tk.Tk):
             fill=tk.BOTH,
             expand=True
         )
+        self.upper_frame.pack_propagate(0)
         self.lower_frame.pack(
             side=tk.BOTTOM,
             fill=tk.BOTH,
             expand=True
         )
+        self.lower_frame.pack_propagate(0)
         # 左侧主容器
         self.left_frame.pack(
             side=tk.LEFT,
@@ -190,14 +196,8 @@ class APP(tk.Tk):
             priority=EventPriority.NORMAL
         )
 
-    def _init_global_logger(self):
-        """配置全局日志，将日志同时写入文件和事件总线"""
-        event_handler = EventLogHandler(self.event_mgr)  # 传递事件总线
-        root_logger = logging.getLogger()
-        root_logger.addHandler(event_handler)
-
     def _setup_initial_page(self):
-        initial_page = self.page_factory.get_page('BlankPage')
+        initial_page = self.page_factory.get_page('Blank_Page')
         self.show_page(initial_page)
 
     def show_page(self, page):

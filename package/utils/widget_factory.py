@@ -41,11 +41,26 @@ class WidgetFactory:
         scrolled_window_style.update(kwargs)
         return tk.Scrollbar(parent, **scrolled_window_style)
 
-    def create_button(self, parent, text, command=None, **kwargs):
-        """创建标准按钮"""
+    def create_button(self, parent, text, command=None, cooldown=3, **kwargs):
+        """创建标准按钮（支持防抖功能）"""
         button_style = WidgetConfig.button
         button_style.update(kwargs)
-        return tk.Button(parent, text=text, command=command, **button_style)
+        button = tk.Button(parent, text=text, command=command, **button_style)
+
+        if cooldown is not None and command is not None:
+            original_command = command
+            duration = int(cooldown * 1000)  # 转换为毫秒
+
+            def wrapped_command():
+                if getattr(button, '_cooldown_active', False):
+                    return
+                button._cooldown_active = True
+                original_command()
+                button.after(duration, lambda: setattr(button, '_cooldown_active', False))
+
+            button.config(command=wrapped_command)
+
+        return button
 
     def create_entry(self, parent, **kwargs):
         """创建标准输入框"""

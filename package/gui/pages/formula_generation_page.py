@@ -17,9 +17,15 @@ class FormulaGenerationPage(BasePage):
 
     def __init__(self, parent, event_mgr):
         super().__init__(parent, event_mgr, title="Formula Generation")
+        self.event_mgr.publish(
+            EventType.STATUS_UPDATE, 
+            data={"status_text": "loading..."}
+        )
         self.widget_factory = WidgetFactory()
         self.left_frame = self.widget_factory.create_frame(self, **AppUIConfig.FunctionZone.FormulaGenerationPage.input_frame)
         self.right_frame = self.widget_factory.create_frame(self, **AppUIConfig.FunctionZone.FormulaGenerationPage.output_frame)
+
+        self.adducts_config = None
 
         # 初始化加合物框架
         self.adduct_frame = None
@@ -51,13 +57,19 @@ class FormulaGenerationPage(BasePage):
         # 绑定窗口调整事件
         self.bind("<Configure>", self.on_window_resize)
 
+        self.event_mgr.publish(
+            EventType.STATUS_UPDATE, 
+            data={"status_text": "done"}
+        )
+
     def _get_adduct_config(self):
-        with open(PathManager().chem_element_config_path, "r", encoding="utf-8") as f:
-            config_data = json.load(f)
-            adducts_config = config_data["adducts"]
+        if not self.adducts_config:
+            with open(PathManager().chem_element_config_path, "r", encoding="utf-8") as f:
+                config_data = json.load(f)
+                self.adducts_config = config_data["adducts"]
         return {
             mode: list(adducts.values()) 
-            for mode, adducts in adducts_config.items()
+            for mode, adducts in self.adducts_config.items()
         }
 
     def _on_ms_mode_change(self, *args):
@@ -251,18 +263,7 @@ class FormulaGenerationPage(BasePage):
         for col in self.table["columns"]:
             if col in visible_cols:
                 continue
-            all_zero = True
-            for item in self.data:
-                value = item.get(col, "")
-                if value not in ("0", "0.0", ""):
-                    try:
-                        if float(value) != 0:
-                            all_zero = False
-                            break
-                    except (ValueError, TypeError):
-                        all_zero = False
-                        break
-            if not all_zero:
+            if any(str(item.get(col, 0)) not in ("0", "0.0", "") for item in self.data):
                 visible_cols.append(col)
         self.table["displaycolumns"] = visible_cols
 
@@ -286,6 +287,11 @@ class FormulaGenerationPage(BasePage):
             self.table.column(col, width=new_width, minwidth=new_width, stretch=False)
 
     def _open_json_file(self):
+        self.event_mgr.publish(
+            EventType.STATUS_UPDATE, 
+            data={"status_text": "loading..."}
+        )
+
         file_path = filedialog.askopenfilename(
             title="选择JSON文件",
             filetypes=[("JSON文件", "*.json"), ("所有文件", "*.*")]
@@ -337,11 +343,15 @@ class FormulaGenerationPage(BasePage):
                 logging.error(f"文件内容异常: {str(e)}")
             except Exception as e:
                 logging.error(f"文件读取失败: {str(e)}")
+        
+        self.event_mgr.publish(
+            EventType.STATUS_UPDATE, 
+            data={"status_text": "done"}
+        )
 
     def _setup_buttons(self):
         btn_frame = self.widget_factory.create_frame(self.left_frame)
         btn_frame.grid(row=6, column=0, sticky="ew")
-        
         btn_frame.grid_columnconfigure(0, weight=1)  # 设置列权重为1，使按钮居中
         
         btn_run = self.widget_factory.create_button(
@@ -366,6 +376,11 @@ class FormulaGenerationPage(BasePage):
         btn_refresh.grid(row=2, column=0, sticky=tk.EW)
 
     def _refresh_page(self):
+        self.event_mgr.publish(
+            EventType.STATUS_UPDATE, 
+            data={"status_text": "loading..."}
+        )
+
         # 1. 重置输入参数
         self.ms_mode.set("ESI+")
         self.m2z.set(100)
@@ -393,7 +408,17 @@ class FormulaGenerationPage(BasePage):
 
         logging.debug("页面已刷新")
 
+        self.event_mgr.publish(
+            EventType.STATUS_UPDATE, 
+            data={"status_text": "done"}
+        )
+
     def _run_analysis(self):
+        self.event_mgr.publish(
+            EventType.STATUS_UPDATE, 
+            data={"status_text": "running..."}
+        )
+
         params = {
             "ms_mode": self.ms_mode.get(),
             "adduct_model": [k for k, v in self.adduct_vars.items() if v.get()],
@@ -425,7 +450,8 @@ class FormulaGenerationPage(BasePage):
             self.after(0, self._update_hidden_columns)
         except Exception as e:
             logging.error(f"分析失败: {e}")
-            self.after(0, lambda e=e: logging.error(f"分析失败: {e}"))
+        finally:
+            self.after(0, self.event_mgr.publish, EventType.STATUS_UPDATE, {"status_text": "done"})
 
     def _map_data(self, raw_data):
         mapped = []

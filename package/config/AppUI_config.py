@@ -137,18 +137,31 @@ class AppUIConfig:
 
             output_frame = {}
 
+        # 分子式搜索页面
+        class FormulaSearchPage:
+            input_frame = {
+                'width': 150,
+            }
+
+            output_frame = {}
+
+            padding = {
+                'padx': BaseConfig.PADDING_A,
+                'pady': BaseConfig.PADDING_A,
+            }
+
     class NavigationName:
         page0 = {
             'chinese': '空白页',
-            'english': 'BlankPage',
+            'english': 'Blank_Page',
         }
         page1 = {
             'chinese': '分子式生成',
-            'english': 'FormulaGenerationPage',
+            'english': 'Formula_Generation_Page',
         }
         page2 = {
             'chinese': '分子式检索',
-            'english': 'FormulaSearchPage',
+            'english': 'Formula_Search_Page',
         }
         page_undefined = {
             'chinese': '预留接口',

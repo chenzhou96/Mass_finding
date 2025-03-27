@@ -2,6 +2,7 @@ from enum import Enum
 
 class EventType(Enum):
     PAGE_SWITCH = "page_switch"
+    STATUS_UPDATE = "status_update"
     LOG_MESSAGE = "log_message"
     ADD_FORMULA = "add_formula"
     ANALYSIS_FAILURE = "analysis_failure"

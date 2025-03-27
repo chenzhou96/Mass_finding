@@ -24,7 +24,7 @@ class NavigationBar(tk.Frame):
         # 生成预留接口按钮
         interface_count = 6
         for i in range(1, interface_count + 1):
-            name = f"Interface{i}Page"
+            name = f"Interface_{i}_Page"
             text = f"预留接口{i}"
             self.buttons[name] = self._create_nav_button(text, name)
 

@@ -10,7 +10,7 @@ class StatusBar(tk.Frame):
         self.event_mgr = event_mgr
         self.status_label = widget_factory.create_label(
             self,
-            text="初始化中···",
+            text="done",
             **AppUIConfig.StatusBar.label
         )
         self.status_label.pack(side=tk.LEFT, padx=10)
@@ -24,11 +24,10 @@ class StatusBar(tk.Frame):
 
     def _subscribe_events(self):
         self.event_mgr.subscribe(
-            EventType.PAGE_SWITCH,
-            self.on_page_switch,
+            EventType.STATUS_UPDATE, 
+            self.on_status_update, 
             priority=EventPriority.NORMAL
         )
 
-    def on_page_switch(self, event):
-        new_page_name = event.data.get('new_page', '未知页面')
-        self.set_status_text(f"当前页面: {new_page_name}")
+    def on_status_update(self, event):
+        self.set_status_text(event.data.get('status_text', ''))

@@ -11,15 +11,15 @@ class PageFactory:
             self.root = root
             self.event_mgr = event_mgr
             self.page_classes = {
-                'BlankPage': BlankPage,
-                'FormulaGenerationPage': FormulaGenerationPage,
-                'FormulaSearchPage': FormulaSearchPage,
-                'Interface1Page': InterfacePage,  # 需要实现
-                'Interface2Page': InterfacePage,  # 需要实现
-                'Interface3Page': InterfacePage,  # 需要实现
-                'Interface4Page': InterfacePage,  # 需要实现
-                'Interface5Page': InterfacePage,  # 需要实现
-                'Interface6Page': InterfacePage   # 需要实现
+                'Blank_Page': BlankPage,
+                'Formula_Generation_Page': FormulaGenerationPage,
+                'Formula_Search_Page': FormulaSearchPage,
+                'Interface_1_Page': InterfacePage,  # 需要实现
+                'Interface_2_Page': InterfacePage,  # 需要实现
+                'Interface_3_Page': InterfacePage,  # 需要实现
+                'Interface_4_Page': InterfacePage,  # 需要实现
+                'Interface_5_Page': InterfacePage,  # 需要实现
+                'Interface_6_Page': InterfacePage   # 需要实现
             }
 
             self._instances = {}
@@ -31,7 +31,7 @@ class PageFactory:
         page_class = self.page_classes.get(page_name)
         if not page_class:
             logging.error(f"未找到页面类: {page_name}")
-            return self.get_page('BlankPage')  # 回退到默认页面
+            return self.get_page('Blank_Page')  # 回退到默认页面
         
         # 检查是否已存在实例，存在则直接返回
         if page_name in self._instances:
