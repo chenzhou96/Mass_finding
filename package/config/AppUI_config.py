@@ -128,6 +128,7 @@ class AppUIConfig:
             element_label = {
                 'width': 2,
                 'anchor': 'e',
+                'bg': BaseConfig.BACKGROUND,
             }
 
             element_entry = {
@@ -140,14 +141,28 @@ class AppUIConfig:
         # 分子式搜索页面
         class FormulaSearchPage:
             input_frame = {
-                'width': 150,
+                'width': 300,
             }
 
-            output_frame = {}
+            output_frame = {
+                'relief': tk.GROOVE
+            }
 
             padding = {
                 'padx': BaseConfig.PADDING_A,
                 'pady': BaseConfig.PADDING_A,
+            }
+
+            labelframe = {
+            }
+
+            text = {
+            }
+
+            right_label = {
+                'anchor': 'w',
+                'bg': BaseConfig.BACKGROUND,
+                'fg': BaseConfig.TEXT_DARK,
             }
 
     class NavigationName:

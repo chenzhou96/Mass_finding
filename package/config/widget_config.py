@@ -47,6 +47,10 @@ class WidgetConfig:
         'width': 0,
     }
 
+    menu = {
+        'tearoff': 0
+    }
+
     button = {
         'bg': BaseConfig.BACKGROUND,
         'fg': BaseConfig.TEXT_DARK,
@@ -75,7 +79,7 @@ class WidgetConfig:
     label = {
         'bg': BaseConfig.BACKGROUND,
         'fg': BaseConfig.TEXT_DARK,
-        'font': (BaseConfig.FONT_STYLE, BaseConfig.FONT_SIZE),
+        'font': (BaseConfig.FONT_STYLE, BaseConfig.FONT_SIZE, 'bold'),
         'padx': BaseConfig.PADDING_A,
         'pady': BaseConfig.PADDING_A,
     }

@@ -31,7 +31,7 @@ class FormulaGenerationPage(BasePage):
         self.adduct_frame = None
         self.adduct_vars = {}  # 重置为字典存储当前选中的加合物
 
-        # 使用网格布局，左侧占1份，右侧占3份
+        # 使用网格布局
         self.grid_columnconfigure(0, weight=0)
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
@@ -357,21 +357,24 @@ class FormulaGenerationPage(BasePage):
         btn_run = self.widget_factory.create_button(
             btn_frame, 
             text="开始分析", 
-            command=self._run_analysis
+            command=self._run_analysis,
+            cooldown=3
         )
         btn_run.grid(row=0, column=0, sticky=tk.EW)
         
         btn_open = self.widget_factory.create_button(
             btn_frame, 
             text="导入文件", 
-            command=self._open_json_file
+            command=self._open_json_file,
+            cooldown=3
         )
         btn_open.grid(row=1, column=0, sticky=tk.EW)
 
         btn_refresh = self.widget_factory.create_button(
             btn_frame, 
             text="刷新页面", 
-            command=self._refresh_page
+            command=self._refresh_page,
+            cooldown=3
         )
         btn_refresh.grid(row=2, column=0, sticky=tk.EW)
 

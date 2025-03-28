@@ -120,6 +120,36 @@ class APP(tk.Tk):
         self.upper_info["scrollbar"].pack(side=tk.RIGHT, fill=tk.Y)
         self.upper_info["text"].pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
+        self.popup_menu = self.widget_factory.create_menu(self.upper_info["text"])
+        self.popup_menu.add_command(label="删除", command=self._delete_selected_text)
+        self.upper_info["text"].bind("<Button-3>", self._show_popup)
+    
+    def _show_popup(self, event):
+        try:
+            self.popup_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.popup_menu.grab_release()
+
+    def _delete_selected_text(self):
+        try:
+            # 获取选中的文本范围
+            sel_start = self.upper_info["text"].index(tk.SEL_FIRST)
+            sel_end = self.upper_info["text"].index(tk.SEL_LAST)
+            
+            # 获取选中的起始行和结束行
+            start_line = int(sel_start.split('.')[0])
+            end_line = int(sel_end.split('.')[0])
+            
+            # 删除多行
+            del_info = self.upper_info["text"].get(f"{start_line}.0", f"{end_line}.end+1c")
+            self.upper_info["text"].config(state=tk.NORMAL)
+            self.upper_info["text"].delete(f"{start_line}.0", f"{end_line}.end+1c")
+            self.upper_info["text"].config(state=tk.DISABLED)
+
+            logging.info(f"删除以下分子\n{del_info}") # 输出删除的文本内容 
+        except tk.TclError:
+            logging.warning("没有选中的文本可删除")
+
     def _init_logger(self):
         """配置日志 UI 组件"""
         scrollable_text = self.widget_factory.create_scrollable_text(
