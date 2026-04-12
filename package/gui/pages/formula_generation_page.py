@@ -6,6 +6,7 @@ from ...service.formulaGeneration import start_analysis
 from ...utils.data_validator import DataValidator
 from ...utils.widget_factory import WidgetFactory
 from ...config.AppUI_config import AppUIConfig
+from ...config.base_config import BaseConfig
 from ...config.event_config import EventType, EventPriority
 from ...config.path_config import PathManager
 import logging
@@ -93,23 +94,24 @@ class FormulaGenerationPage(BasePage):
         
         # 启动网格布局
         self.adduct_frame.grid_propagate(True)
-        
-        # 预配置列和行
-        self.adduct_frame.grid_columnconfigure(0, weight=1)  # 列配置
+        self.adduct_frame.columnconfigure(0, weight=1)
+        self.adduct_frame.columnconfigure(1, weight=1)
         
         # 重置变量
         self.adduct_vars = {}
         
-        # 添加选项
+        # 添加选项，使用两列布局来节省垂直空间
+        cols = 2
         for idx, adduct in enumerate(adducts):
+            row = idx // cols
+            col = idx % cols
             var = tk.BooleanVar()
             cb = self.widget_factory.create_checkbutton(
                 self.adduct_frame, 
                 text=adduct, 
                 variable=var,
             )
-            cb.grid(row=idx, column=0, sticky="w")
-            
+            cb.grid(row=row, column=col, sticky="w", padx=BaseConfig.PADDING_A, pady=BaseConfig.PADDING_A)
             self.adduct_vars[adduct] = var
 
     def _setup_left_frame(self):
@@ -169,23 +171,33 @@ class FormulaGenerationPage(BasePage):
 
         self.elements_frame = create_input_frame(self.left_frame, "元素配置(不超过)", 5)
         self.elements_frame.grid_propagate(True)
-        self.elements_frame.columnconfigure(0, weight=0)  # 标签列固定
-        self.elements_frame.columnconfigure(1, weight=1)  # 输入列扩展
-        self.elements_frame.columnconfigure(2, weight=0)  # 标签列固定
-        self.elements_frame.columnconfigure(3, weight=1)  # 输入列扩展
+        self.elements_frame.columnconfigure(0, weight=0)
+        self.elements_frame.columnconfigure(1, weight=1)
+        self.elements_frame.columnconfigure(2, weight=0)
+        self.elements_frame.columnconfigure(3, weight=1)
 
+        element_options = ["不限"] + [str(i) for i in range(0, 13)]
         for i, elem in enumerate(elements):
             row, col_in_row = divmod(i, 2)
-            
-            # 计算实际列位置：每组元素占两列（标签+输入框）
             label_col = col_in_row * 2
             entry_col = label_col + 1
 
-            element_label = self.widget_factory.create_label(self.elements_frame, text=f"{elem}:", **AppUIConfig.FunctionZone.FormulaGenerationPage.element_label)
-            element_label.grid(row=row, column=label_col, **AppUIConfig.FunctionZone.FormulaGenerationPage.padding,)
+            element_label = self.widget_factory.create_label(
+                self.elements_frame,
+                text=f"{elem}:",
+                **AppUIConfig.FunctionZone.FormulaGenerationPage.element_label
+            )
+            element_label.grid(row=row, column=label_col, **AppUIConfig.FunctionZone.FormulaGenerationPage.padding)
             
-            entry = self.widget_factory.create_entry(self.elements_frame, textvariable=self.element_vars[elem], **AppUIConfig.FunctionZone.FormulaGenerationPage.element_entry)
-            entry.grid(row=row, column=entry_col, **AppUIConfig.FunctionZone.FormulaGenerationPage.padding)
+            combo = ttk.Combobox(
+                self.elements_frame,
+                textvariable=self.element_vars[elem],
+                values=element_options,
+                state='readonly',
+                width=8,
+                font=(BaseConfig.FONT_STYLE, BaseConfig.FONT_SIZE)
+            )
+            combo.grid(row=row, column=entry_col, **AppUIConfig.FunctionZone.FormulaGenerationPage.padding)
 
     def _setup_right_frame(self):
         # 创建筛选栏容器
@@ -204,26 +216,57 @@ class FormulaGenerationPage(BasePage):
         self.filters = {}
         for row_idx, row_columns in enumerate([first_row, second_row]):
             for col_idx, col_name in enumerate(row_columns):
-                # 创建Labelframe容器
                 labelframe = self.widget_factory.create_labelframe(
-                    filter_frame, 
+                    filter_frame,
                     text=col_name,
                 )
-                labelframe.grid(row=row_idx, column=col_idx, sticky="w")
-                
-                var = tk.StringVar()
-                if col_name in ["M/Z", "Adduct"]:
-                    width = 12
+                labelframe.grid(row=row_idx, column=col_idx, sticky="nsew", padx=BaseConfig.PADDING_A, pady=BaseConfig.PADDING_A)
+
+                if col_name == "Adduct":
+                    var = tk.StringVar()
+                    entry = ttk.Combobox(
+                        labelframe,
+                        textvariable=var,
+                        values=[""],
+                        state='normal',
+                        width=12,
+                        font=(BaseConfig.FONT_STYLE, BaseConfig.FONT_SIZE)
+                    )
+                    entry.pack(fill=tk.X, **AppUIConfig.FunctionZone.FormulaGenerationPage.padding)
+                    var.trace_add("write", self._apply_filters)
+                    self.filters[col_name] = {'type': 'text', 'var': var}
                 else:
-                    width = 8
-                entry = self.widget_factory.create_entry(
-                    labelframe, 
-                    textvariable=var, 
-                    width=width,
-                )
-                entry.pack(fill=tk.X, **AppUIConfig.FunctionZone.FormulaGenerationPage.padding)
-                
-                self.filters[col_name] = var
+                    min_var = tk.StringVar()
+                    max_var = tk.StringVar()
+                    range_frame = tk.Frame(labelframe, bg=BaseConfig.BACKGROUND)
+                    range_frame.pack(fill=tk.X, **AppUIConfig.FunctionZone.FormulaGenerationPage.padding)
+
+                    min_spin = ttk.Spinbox(
+                        range_frame,
+                        textvariable=min_var,
+                        from_=0,
+                        to=999,
+                        width=5,
+                        font=(BaseConfig.FONT_STYLE, BaseConfig.FONT_SIZE)
+                    )
+                    min_spin.pack(side=tk.LEFT, fill=tk.X, expand=True)
+                    tk.Label(range_frame, text="~", bg=BaseConfig.BACKGROUND, fg=BaseConfig.TEXT_LIGHT, font=(BaseConfig.FONT_STYLE, BaseConfig.FONT_SIZE)).pack(side=tk.LEFT, padx=(4, 4))
+                    max_spin = ttk.Spinbox(
+                        range_frame,
+                        textvariable=max_var,
+                        from_=0,
+                        to=999,
+                        width=5,
+                        font=(BaseConfig.FONT_STYLE, BaseConfig.FONT_SIZE)
+                    )
+                    max_spin.pack(side=tk.LEFT, fill=tk.X, expand=True)
+                    min_var.trace_add("write", self._apply_filters)
+                    max_var.trace_add("write", self._apply_filters)
+                    self.filters[col_name] = {
+                        'type': 'range',
+                        'min': min_var,
+                        'max': max_var,
+                    }
 
         # 确保列权重均匀分布
         max_cols = max(len(first_row), len(second_row))
@@ -252,9 +295,11 @@ class FormulaGenerationPage(BasePage):
             self.table.heading(col, text=col)
             self.table.column(col, minwidth=50, anchor=tk.CENTER, stretch=False)
 
-        # 绑定筛选事件
-        for var in self.filters.values():
-            var.trace_add("write", self._apply_filters)
+        self.table_popup_menu = self.widget_factory.create_menu(self.table, tearoff=0)
+        self.table_popup_menu.add_command(label="发送到分子式 bus", command=self._send_selected_row_to_bus)
+        self.table_popup_menu.add_separator()
+        self.table_popup_menu.add_command(label="删除", command=self._delete_selected_row)
+        self.table.bind("<Button-3>", self._on_table_right_click)
 
         self.table.bind("<Double-1>", self._on_table_double_click)
 
@@ -351,32 +396,42 @@ class FormulaGenerationPage(BasePage):
 
     def _setup_buttons(self):
         btn_frame = self.widget_factory.create_frame(self.left_frame)
-        btn_frame.grid(row=6, column=0, sticky="ew")
-        btn_frame.grid_columnconfigure(0, weight=1)  # 设置列权重为1，使按钮居中
-        
-        btn_run = self.widget_factory.create_button(
-            btn_frame, 
-            text="开始分析", 
-            command=self._run_analysis,
-            cooldown=3
-        )
-        btn_run.grid(row=0, column=0, sticky=tk.EW)
-        
-        btn_open = self.widget_factory.create_button(
-            btn_frame, 
-            text="导入文件", 
-            command=self._open_json_file,
-            cooldown=3
-        )
-        btn_open.grid(row=1, column=0, sticky=tk.EW)
+        btn_frame.grid(row=6, column=0, sticky="ew", pady=(BaseConfig.PADDING_B, 0))
+        for idx in range(3):
+            btn_frame.grid_columnconfigure(idx, weight=1)
 
-        btn_refresh = self.widget_factory.create_button(
-            btn_frame, 
-            text="刷新页面", 
-            command=self._refresh_page,
-            cooldown=3
+        btn_run = self.widget_factory.create_rounded_button(
+            btn_frame,
+            text="开始分析",
+            command=self._run_analysis,
+            cooldown=3,
+            width=14,
+            height=2,
+            hover_bg=BaseConfig.ACCENT_COLOR,
         )
-        btn_refresh.grid(row=2, column=0, sticky=tk.EW)
+        btn_run.grid(row=0, column=0, sticky="ew", padx=(0, BaseConfig.PADDING_A))
+
+        btn_open = self.widget_factory.create_rounded_button(
+            btn_frame,
+            text="导入文件",
+            command=self._open_json_file,
+            cooldown=3,
+            width=14,
+            height=2,
+            hover_bg=BaseConfig.ACCENT_COLOR,
+        )
+        btn_open.grid(row=0, column=1, sticky="ew", padx=BaseConfig.PADDING_A)
+
+        btn_refresh = self.widget_factory.create_rounded_button(
+            btn_frame,
+            text="刷新页面",
+            command=self._refresh_page,
+            cooldown=3,
+            width=14,
+            height=2,
+            hover_bg=BaseConfig.ACCENT_COLOR,
+        )
+        btn_refresh.grid(row=0, column=2, sticky="ew", padx=(BaseConfig.PADDING_A, 0))
 
     def _refresh_page(self):
         self.event_mgr.publish(
@@ -403,8 +458,17 @@ class FormulaGenerationPage(BasePage):
         self.table.delete(*self.table.get_children())
         
         # 5. 清除筛选条件
-        for var in self.filters.values():
-            var.set("")
+        for filter_control in self.filters.values():
+            if isinstance(filter_control, dict) and filter_control.get('type') == 'range':
+                filter_control['min'].set("")
+                filter_control['max'].set("")
+            elif isinstance(filter_control, dict) and filter_control.get('type') == 'text':
+                filter_control['var'].set("")
+            else:
+                try:
+                    filter_control.set("")
+                except Exception:
+                    pass
         
         # 6. 重置隐藏列
         self._update_hidden_columns()
@@ -438,7 +502,10 @@ class FormulaGenerationPage(BasePage):
         
         elements = params["elements"]
         for k, v in elements.items():
-            params['elements'][k] = int(v)
+            if v == "不限":
+                params['elements'][k] = -1
+            else:
+                params['elements'][k] = int(v)
 
         logging.debug(f"参数: {params}")
 
@@ -492,50 +559,51 @@ class FormulaGenerationPage(BasePage):
         self.table.delete(*self.table.get_children())
         for item in self.data:
             valid = True
-            for col in self.filters:
-                filter_val = self.filters[col].get().strip()
-                if not filter_val:  # 无输入时跳过
-                    continue
-                    
-                if col == "Adduct":  # 保留原有模糊匹配逻辑
-                    cell_val = item.get(col, "")
-                    if filter_val.lower() not in cell_val.lower():
-                        valid = False
-                        break
-                else:
-                    # 解析数值条件
-                    parts = re.findall(r'\d+\.?\d*', filter_val)  # 提取所有数字
-                    if not parts:
-                        continue  # 无效输入时跳过
-                    
-                    numbers = [float(p) for p in parts[:2]]  # 只取前两个数值
-                    if not numbers:
-                        continue
-                    
-                    # 获取数据单元格数值
-                    cell_val_str = item.get(col, "")
-                    try:
-                        cell_num = float(cell_val_str)
-                    except (ValueError, TypeError):
-                        valid = False  # 数据非数值类型视为不匹配
-                        break
-
-                    if len(numbers) == 1:
-                        # 单值匹配
-                        target = numbers[0]
-                        if cell_num != target:
+            for col, filter_control in self.filters.items():
+                if isinstance(filter_control, dict):
+                    if filter_control['type'] == 'text':
+                        filter_val = filter_control['var'].get().strip()
+                        if not filter_val:
+                            continue
+                        cell_val = item.get(col, "")
+                        if filter_val.lower() not in cell_val.lower():
                             valid = False
                             break
-                    else:
-                        # 范围匹配（自动排序）
-                        lower = min(numbers[0], numbers[1])
-                        upper = max(numbers[0], numbers[1])
-                        if not (lower <= cell_num <= upper):
+                    elif filter_control['type'] == 'range':
+                        min_val = filter_control['min'].get().strip()
+                        max_val = filter_control['max'].get().strip()
+                        if not min_val and not max_val:
+                            continue
+                        try:
+                            cell_val_str = item.get(col, "")
+                            cell_num = float(cell_val_str)
+                        except (ValueError, TypeError):
+                            valid = False
+                            break
+                        if min_val:
+                            try:
+                                if cell_num < float(min_val):
+                                    valid = False
+                                    break
+                            except ValueError:
+                                pass
+                        if max_val:
+                            try:
+                                if cell_num > float(max_val):
+                                    valid = False
+                                    break
+                            except ValueError:
+                                pass
+                else:
+                    filter_val = filter_control.get().strip()
+                    if not filter_val:
+                        continue
+                    if col == "Adduct":
+                        if filter_val.lower() not in item.get(col, "").lower():
                             valid = False
                             break
 
             if valid:
-                # 按列顺序插入数据
                 values = [item[col] for col in self.table["columns"]]
                 self.table.insert("", "end", values=values, tags=(json.dumps(item),))
 
@@ -574,4 +642,74 @@ class FormulaGenerationPage(BasePage):
 
         # 发送事件
         self.event_mgr.publish(EventType.ADD_FORMULA, data=formula_str, priority=EventPriority.NORMAL)
-        logging.info(f"添加 {formula_str} 为感兴趣的分子式")
+
+    def _on_table_right_click(self, event):
+        row_id = self.table.identify_row(event.y)
+        if row_id:
+            self.table.selection_set(row_id)
+            try:
+                self.table_popup_menu.tk_popup(event.x_root, event.y_root)
+            finally:
+                self.table_popup_menu.grab_release()
+        return "break"
+
+    def _send_selected_row_to_bus(self):
+        item = self.table.selection()
+        if not item:
+            return
+        item = item[0]
+        tags = self.table.item(item, 'tags')
+        if not tags:
+            return
+        try:
+            data = json.loads(tags[0])
+        except Exception as e:
+            logging.error(f"无法解析数据项: {e}")
+            return
+
+        formula_str = self._formula_from_row_data(data)
+        self.event_mgr.publish(EventType.ADD_FORMULA, data=formula_str, priority=EventPriority.NORMAL)
+        logging.info(f"已发送 {formula_str} 到分子式 bus")
+
+    def _delete_selected_row(self):
+        item = self.table.selection()
+        if not item:
+            messagebox.showwarning("删除失败", "请先选中要删除的行")
+            return
+
+        row_id = item[0]
+        tags = self.table.item(row_id, 'tags')
+        formula_str = None
+        if tags:
+            try:
+                data = json.loads(tags[0])
+                formula_str = self._formula_from_row_data(data)
+            except Exception as e:
+                logging.error(f"无法解析数据项: {e}")
+
+        if not messagebox.askyesno("确认删除", f"是否删除选中的分子式？{chr(10)}{formula_str if formula_str else ''}"):
+            return
+
+        if tags:
+            try:
+                data = json.loads(tags[0])
+                filtered_data = [item for item in self.data if json.dumps(item, ensure_ascii=False) != tags[0]]
+                self.data = filtered_data
+            except Exception:
+                pass
+
+        self.table.delete(row_id)
+        self._apply_filters()
+        logging.info(f"删除分子式: {formula_str}")
+
+    def _formula_from_row_data(self, data):
+        elements_order = ['C', 'H', 'N', 'O', 'S', 'P', 'Si', 'F', 'Cl', 'Br', 'I', 'B', 'Se']
+        formula = []
+        for elem in elements_order:
+            count = data.get(elem, '0')
+            if count != 0:
+                if count == 1:
+                    formula.append(f'{elem}')
+                else:
+                    formula.append(f"{elem}{count}")
+        return ''.join(formula)

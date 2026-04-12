@@ -37,23 +37,24 @@ class EventBus:
             # 按优先级排序（高优先级优先）
             listeners.sort(key=lambda l: l.priority, reverse=True)
             for listener in listeners:
-                # 过滤条件检查
                 if listener.filter and not listener.filter(event):
                     continue
                 try:
                     listener.callback(event)
-                except Exception as e:
-                    print(f"事件 {event.event_type} 处理失败: {e}")  # 简化错误处理
+                except Exception:
+                    logging.exception(f"事件 {event.event_type} 处理失败")
 
 class EventManager:
-    def __init__(self):
+    def __init__(self, root):
         self.bus = EventBus()
+        self.root = root
 
     def subscribe(self, event_type, callback, priority=EventPriority.NORMAL):
-        """外部订阅事件的接口"""
+        # 将回调包装为异步执行
+        async_callback = lambda event: self.root.after(0, callback, event)
         self.bus.subscribe(
             event_type.value,
-            callback,
+            async_callback,
             priority=priority.value
         )
 

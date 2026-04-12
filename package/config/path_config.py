@@ -7,7 +7,7 @@ import logging
 def _find_project_root() -> Path:
     current_path = Path(__file__).resolve()
     while current_path != current_path.parent:
-        if (current_path / 'run.py').exists() and (current_path / '.git').exists():
+        if (current_path / 'run.py').exists():
             return current_path
         current_path = current_path.parent
     raise RuntimeError("无法定位项目根目录")
@@ -58,7 +58,7 @@ def _get_cache_path(parent_path: Path, folder_name: str) -> Path:
     except OSError as e:
         logging.error(f"创建文件夹 {folder_name} 失败\n错误信息: {e}")
         raise EnvironmentError(f"Failed to create mass_finding_cache folder: {e}")
-
+    
 class PathManager:
     def __init__(self):
         self.root_dir = _find_project_root()
@@ -69,23 +69,46 @@ class PathManager:
         self.ico_path = self.resource / "icon.ico"
 
         self.desktop_path = _get_desktop_path()
+        self.existing_formula_filename = "existing_formula.json"
+        self.failed_formula_filename = "failed_formula.json"
 
     def get_mass_finding_cache_path(self) -> Path:
-        self.mass_finding_cache_path = _get_cache_path(self.desktop_path, 'mass_finding_cache')
+        self.mass_finding_cache_path = _get_cache_path(self.root_dir, 'mass_finding_cache')
         return self.mass_finding_cache_path
 
     def get_formula_generation_cache_path(self) -> Path:
+        if not hasattr(self, 'mass_finding_cache_path'):
+            self.get_mass_finding_cache_path()
         self.formula_generation_cache_path = _get_cache_path(self.mass_finding_cache_path, 'formula_generation_cache')
         return self.formula_generation_cache_path
     
     def get_formula_search_cache_path(self) -> Path:
+        if not hasattr(self, 'mass_finding_cache_path'):
+            self.get_mass_finding_cache_path()
         self.formula_search_cache_path = _get_cache_path(self.mass_finding_cache_path, 'formula_search_cache')
         return self.formula_search_cache_path
     
     def get_initialization_cache_path(self) -> Path:
+        if not hasattr(self, 'mass_finding_cache_path'):
+            self.get_mass_finding_cache_path()
         self.initialization_cache_path = _get_cache_path(self.mass_finding_cache_path, 'initialization_cache')
         return self.initialization_cache_path
     
     def get_logger_cache_path(self) -> Path:
         self.logger_cache_path = _get_cache_path(self.mass_finding_cache_path, 'logger_cache')
         return self.logger_cache_path
+    
+    def create_cache_file(self, parent_path: Path, file_name: str) -> Path:
+        file_path = parent_path / file_name
+        try:
+            # 确保父目录存在（包含多级目录创建）
+            parent_path.mkdir(parents=True, exist_ok=True)
+            
+            # 仅在文件不存在时创建文件，避免覆盖已有缓存
+            if not file_path.exists():
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    f.write('[]')
+            return file_path
+        except (OSError, IOError) as e:
+            logging.error(f"创建/读取文件 {file_name} 失败\n错误信息: {str(e)}")
+            raise EnvironmentError(f"Failed to create file {file_name}: {str(e)}")

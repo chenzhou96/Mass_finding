@@ -1,4 +1,5 @@
 import tkinter as tk
+from tkinter import messagebox
 import logging
 from .components.navigation_bar import NavigationBar
 from ..utils.logger import Logger, EventLogHandler
@@ -7,6 +8,7 @@ from ..config.AppUI_config import AppUIConfig
 from ..config.event_config import EventType, EventPriority
 from ..core.page_factory import PageFactory
 from .components.status_bar import StatusBar
+from ..config.base_config import BaseConfig
 from ..utils.widget_factory import WidgetFactory
 import platform
 from PIL import Image, ImageTk
@@ -14,7 +16,6 @@ from ..config.path_config import PathManager
 
 class APP(tk.Tk):
     def __init__(self):
-        self.current_page = None
         self.path_manager = PathManager()
         self._init_window()
         self._init_components()
@@ -47,8 +48,10 @@ class APP(tk.Tk):
 
     def _init_components(self):
         """优化后的组件初始化"""
+        self.current_page = None
+        self.formula_bus = []
         # 1. 初始化事件总线
-        self.event_mgr = EventManager()
+        self.event_mgr = EventManager(root=self)
         # 2. 初始化日志器（依赖 event_mgr 的 bus）
         self.logger = Logger(event_bus=self.event_mgr.bus)
         self.widget_factory = WidgetFactory()
@@ -120,35 +123,152 @@ class APP(tk.Tk):
         self.upper_info["scrollbar"].pack(side=tk.RIGHT, fill=tk.Y)
         self.upper_info["text"].pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        self.popup_menu = self.widget_factory.create_menu(self.upper_info["text"])
+        self.upper_info["text"].tag_configure("selected_line", background="#d0e7ff")
+        self.selected_bus_indices = set()
+        self.selection_anchor = None
+
+        self.upper_info["text"].bind("<Button-1>", self._on_formula_bus_click)
+        self.upper_info["text"].bind("<Shift-Button-1>", self._on_formula_bus_shift_click)
+        self.upper_info["text"].bind("<B1-Motion>", self._on_formula_bus_drag)
+        self.upper_info["text"].bind("<ButtonRelease-1>", self._on_formula_bus_release)
+
+        self.popup_menu = self.widget_factory.create_menu(self.upper_info["text"], tearoff=0)
+        self.popup_menu.add_command(label="发送到待搜索分子式", command=self._send_selected_to_search)
+        self.popup_menu.add_separator()
         self.popup_menu.add_command(label="删除", command=self._delete_selected_text)
         self.upper_info["text"].bind("<Button-3>", self._show_popup)
     
     def _show_popup(self, event):
         try:
+            self._ensure_right_click_selection(event)
             self.popup_menu.tk_popup(event.x_root, event.y_root)
         finally:
             self.popup_menu.grab_release()
 
-    def _delete_selected_text(self):
-        try:
-            # 获取选中的文本范围
-            sel_start = self.upper_info["text"].index(tk.SEL_FIRST)
-            sel_end = self.upper_info["text"].index(tk.SEL_LAST)
-            
-            # 获取选中的起始行和结束行
-            start_line = int(sel_start.split('.')[0])
-            end_line = int(sel_end.split('.')[0])
-            
-            # 删除多行
-            del_info = self.upper_info["text"].get(f"{start_line}.0", f"{end_line}.end+1c")
-            self.upper_info["text"].config(state=tk.NORMAL)
-            self.upper_info["text"].delete(f"{start_line}.0", f"{end_line}.end+1c")
-            self.upper_info["text"].config(state=tk.DISABLED)
+    def _ensure_right_click_selection(self, event):
+        line = self._text_line_at_event(event)
+        if line is None:
+            return
+        if line not in self.selected_bus_indices:
+            self.selection_anchor = line
+            self._select_range(line, line)
 
-            logging.info(f"删除以下分子\n{del_info}") # 输出删除的文本内容 
-        except tk.TclError:
-            logging.warning("没有选中的文本可删除")
+    def _text_line_at_event(self, event):
+        text_widget = self.upper_info["text"]
+        try:
+            index = text_widget.index(f"@{event.x},{event.y}")
+            line = int(index.split('.')[0]) - 1
+            if line < 0 or line >= len(self.formula_bus):
+                return None
+            return line
+        except Exception:
+            return None
+
+    def _select_range(self, start_line, end_line):
+        text_widget = self.upper_info["text"]
+        text_widget.tag_remove("selected_line", "1.0", tk.END)
+        start = min(start_line, end_line)
+        end = max(start_line, end_line)
+        self.selected_bus_indices = set(range(start, end + 1))
+        for line in self.selected_bus_indices:
+            text_widget.tag_add(
+                "selected_line",
+                f"{line + 1}.0",
+                f"{line + 1}.end"
+            )
+
+    def _on_formula_bus_click(self, event):
+        line = self._text_line_at_event(event)
+        if line is not None:
+            self.selection_anchor = line
+            self._select_range(line, line)
+        return "break"
+
+    def _on_formula_bus_shift_click(self, event):
+        line = self._text_line_at_event(event)
+        if line is not None:
+            if self.selection_anchor is None:
+                self.selection_anchor = line
+            self._select_range(self.selection_anchor, line)
+        return "break"
+
+    def _on_formula_bus_drag(self, event):
+        if self.selection_anchor is None:
+            self.selection_anchor = self._text_line_at_event(event)
+            if self.selection_anchor is None:
+                return "break"
+        target_line = self._text_line_at_event(event)
+        if target_line is not None:
+            self._select_range(self.selection_anchor, target_line)
+        return "break"
+
+    def _on_formula_bus_release(self, event):
+        if self.selection_anchor is None:
+            return
+        target_line = self._text_line_at_event(event)
+        if target_line is not None:
+            self._select_range(self.selection_anchor, target_line)
+        return "break"
+
+    def _update_formula_display(self):
+        """根据列表内容更新文本框显示"""
+        text_widget = self.upper_info["text"]
+        text_widget.config(state=tk.NORMAL)
+        text_widget.delete('1.0', tk.END)  # 清空原有内容
+        for formula in self.formula_bus:
+            text_widget.insert(tk.END, f"{formula}\n")
+        self.selected_bus_indices = set()
+        self.selection_anchor = None
+        text_widget.tag_remove("selected_line", "1.0", tk.END)
+        text_widget.config(state=tk.DISABLED)
+
+    def _on_add_formula(self, event):
+        formulas = event.data
+        if isinstance(formulas, str):
+            formulas = [formulas]
+
+        added = []
+        for formula_str in formulas:
+            if formula_str and formula_str not in self.formula_bus:
+                self.formula_bus.append(formula_str)
+                added.append(formula_str)
+
+        if added:
+            logging.info(f"添加 {', '.join(added)} 到分子式bus")
+            self._update_formula_display()  # 列表更新后刷新显示
+        else:
+            logging.warning(f"添加失败，分子式已存在或无效：{formulas}")
+
+    def _delete_selected_text(self):
+        if not self.selected_bus_indices:
+            messagebox.showwarning("删除失败", "请先选中要删除的分子式")
+            return
+
+        selected_formulas = [self.formula_bus[i] for i in sorted(self.selected_bus_indices)]
+        answer = messagebox.askyesno(
+            "确认删除",
+            f"是否删除选中的分子式？\n\n{chr(10).join(selected_formulas)}"
+        )
+        if not answer:
+            return
+
+        for index in sorted(self.selected_bus_indices, reverse=True):
+            del self.formula_bus[index]
+
+        self.selected_bus_indices = set()
+        self.selection_anchor = None
+        self._update_formula_display()
+        logging.info(f"删除以下分子：\n{chr(10).join(selected_formulas)}")
+
+    def _send_selected_to_search(self):
+        if not self.selected_bus_indices:
+            messagebox.showwarning("发送失败", "请先选中要发送的分子式")
+            return
+
+        selected_formulas = [self.formula_bus[i] for i in sorted(self.selected_bus_indices)]
+        self.event_mgr.publish(EventType.ADD_FORMULA, data=selected_formulas, priority=EventPriority.NORMAL)
+        logging.info(f"发送到待搜索分子式：{', '.join(selected_formulas)}")
+        messagebox.showinfo("发送成功", f"已发送 {len(selected_formulas)} 个分子式到待搜索队列")
 
     def _init_logger(self):
         """配置日志 UI 组件"""
@@ -169,17 +289,21 @@ class APP(tk.Tk):
         self.nav_frame.pack(
             side=tk.TOP,
             fill=tk.X,
-            **AppUIConfig.NavigationBar.padding
+            padx=BaseConfig.PADDING_C,
+            pady=(BaseConfig.PADDING_B, 0)
         )
         self.mid_frame.pack(
             side=tk.TOP,
             fill=tk.BOTH,
             expand=True,
+            padx=BaseConfig.PADDING_C,
+            pady=BaseConfig.PADDING_B,
         )
         self.status_frame.pack(
             side=tk.BOTTOM,
             fill=tk.X,
-            **AppUIConfig.StatusBar.padding
+            padx=BaseConfig.PADDING_C,
+            pady=(0, BaseConfig.PADDING_B)
         )
         # 导航栏布局
         self.nav_bar.pack(
@@ -195,20 +319,22 @@ class APP(tk.Tk):
         self.right_frame.pack(
             side=tk.RIGHT,
             fill=tk.Y,
-            **AppUIConfig.InteractiveZone.padding
+            padx=(0, BaseConfig.PADDING_C),
+            pady=BaseConfig.PADDING_A,
         )
         self.right_frame.pack_propagate(0)
         # 右侧上下容器
         self.upper_frame.pack(
             side=tk.TOP,
             fill=tk.BOTH,
-            expand=True
+            expand=True,
+            pady=(0, BaseConfig.PADDING_A)
         )
         self.upper_frame.pack_propagate(0)
         self.lower_frame.pack(
             side=tk.BOTTOM,
             fill=tk.BOTH,
-            expand=True
+            expand=True,
         )
         self.lower_frame.pack_propagate(0)
         # 左侧主容器
@@ -216,7 +342,8 @@ class APP(tk.Tk):
             side=tk.LEFT,
             fill=tk.BOTH,
             expand=True,
-            **AppUIConfig.FunctionZone.padding
+            padx=(BaseConfig.PADDING_B, 0),
+            pady=BaseConfig.PADDING_A,
         )
 
     def _init_event_handlers(self):
@@ -244,14 +371,6 @@ class APP(tk.Tk):
         )
         self.current_page = page
         self.update_idletasks()
-
-    def _on_add_formula(self, event):
-        formula_str = event.data
-        text_widget = self.upper_info["text"]
-        text_widget.config(state=tk.NORMAL)
-        text_widget.insert(tk.END, f"{formula_str}\n")
-        text_widget.see(tk.END)
-        text_widget.config(state=tk.DISABLED)
 
 if __name__ == '__main__':
     app = APP()

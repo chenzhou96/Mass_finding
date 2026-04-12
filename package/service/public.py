@@ -110,6 +110,15 @@ class JSONExporter_formulaGeneration:
             raise
 
 class JSONExporter_formulaSearch_PubChem:
+    def _get_value(self, compound, attr, aliases=None, default=None):
+        if isinstance(compound, dict):
+            if aliases:
+                for alias in aliases:
+                    if alias in compound:
+                        return compound[alias]
+            return compound.get(attr, default)
+        return getattr(compound, attr, default)
+
     def export(self, results: tuple):
         # 传递的参数是元组，形式（molecular_formula: str, compounds: list）
         try:
@@ -119,18 +128,24 @@ class JSONExporter_formulaSearch_PubChem:
 
             if compounds:
                 first_compound = compounds[0]
-                monoisotopic_mass = first_compound.monoisotopic_mass
-                molecular_weight = first_compound.molecular_weight
+                monoisotopic_mass = self._get_value(first_compound, 'monoisotopic_mass', ['MonoisotopicMass'])
+                molecular_weight = self._get_value(first_compound, 'molecular_weight', ['MolecularWeight'])
             else:
                 monoisotopic_mass = None
                 molecular_weight = None
 
             for compound in compounds:
                 data = {
-                    "iupac_name": compound.iupac_name,
-                    "cid": compound.cid,
-                    "isomeric_smiles": compound.isomeric_smiles,
-                    "canonical_smiles": compound.canonical_smiles,
+                    "molecular_formula": molecular_formula,
+                    "cid": self._get_value(compound, 'cid', ['CID']),
+                    "iupac_name": self._get_value(compound, 'iupac_name', ['IUPACName']),
+                    "isomeric_smiles": self._get_value(compound, 'isomeric_smiles', ['IsomericSMILES']),
+                    "canonical_smiles": self._get_value(compound, 'canonical_smiles', ['CanonicalSMILES']),
+                    "inchi": self._get_value(compound, 'inchi', ['InChI']),
+                    "inchikey": self._get_value(compound, 'inchikey', ['InChIKey']),
+                    "molecular_weight": self._get_value(compound, 'molecular_weight', ['MolecularWeight']),
+                    "monoisotopic_mass": self._get_value(compound, 'monoisotopic_mass', ['MonoisotopicMass']),
+                    "synonyms": self._get_value(compound, 'synonyms', ['synonyms'], []),
                 }
                 results_list.append(data)
                 count += 1
@@ -151,7 +166,7 @@ class JSONExporter_formulaSearch_PubChem:
             output_filename = f"formula_search_results_{molecular_formula}.json"
             path_manager = PathManager()
             path_manager.get_mass_finding_cache_path()
-            output_path = path_manager.get_formula_search_cache_path / output_filename
+            output_path = path_manager.get_formula_search_cache_path() / output_filename
 
             with open(output_path, 'w', encoding='utf-8') as f:
                 json.dump(data_to_save, f, indent=4, ensure_ascii=False)

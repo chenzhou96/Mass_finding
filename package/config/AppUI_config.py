@@ -14,7 +14,7 @@ class AppUIConfig:
 
         frame = {
             'bg': BaseConfig.BACKGROUND,
-            'bd': BaseConfig.BD_B,
+            'bd': 0,
             'relief': tk.FLAT,
         }
 
@@ -22,28 +22,33 @@ class AppUIConfig:
     class NavigationBar:
         frame = {
             **WidgetConfig.frame,
+            'bg': BaseConfig.BACKGROUND,
         }
 
         button = {
             **WidgetConfig.button,
-            'width': 12,
+            'width': 14,
             'height': 1,
             'font': (BaseConfig.FONT_STYLE, BaseConfig.FONT_SIZE, 'bold'),
+            'bg': BaseConfig.PRIMARY_COLOR,
+            'fg': '#ffffff',
+            'activebackground': BaseConfig.SECONDARY_COLOR,
+            'activeforeground': '#ffffff',
         }
 
         active_button = {
-            'bg': BaseConfig.PRIMARY_COLOR,
-            'fg': BaseConfig.BACKGROUND,
-            'bd': BaseConfig.BD_B,
-            'relief': tk.SUNKEN,
-            'width': 12,
+            'bg': BaseConfig.SECONDARY_COLOR,
+            'fg': '#202020',
+            'bd': 0,
+            'relief': tk.FLAT,
+            'width': 14,
             'height': 1,
             'font': (BaseConfig.FONT_STYLE, BaseConfig.FONT_SIZE, 'bold'),
         }
 
         padding = {
-            'padx': BaseConfig.PADDING_A,
-            'pady': BaseConfig.PADDING_A,
+            'padx': BaseConfig.PADDING_B,
+            'pady': BaseConfig.PADDING_B,
         }
         
         class PageName:
@@ -67,18 +72,22 @@ class AppUIConfig:
     # 状态栏
     class StatusBar:
         frame = {
-            'bg': BaseConfig.THIRD_COLOR,
+            'bg': BaseConfig.BACKGROUND,
+            'bd': 1,
+            'relief': tk.FLAT,
+            'highlightthickness': 1,
+            'highlightbackground': BaseConfig.SECONDARY_COLOR,
         }
 
         text = {}
 
         padding = {
-            'padx': BaseConfig.PADDING_A,
-            'pady': BaseConfig.PADDING_A,
+            'padx': BaseConfig.PADDING_B,
+            'pady': BaseConfig.PADDING_B,
         }
 
         label = {
-            'bg': BaseConfig.THIRD_COLOR,
+            'bg': BaseConfig.BACKGROUND,
             'fg': BaseConfig.TEXT_DARK,
             'font': (BaseConfig.FONT_STYLE, BaseConfig.FONT_SIZE_SMALL, 'bold')
         }
@@ -86,13 +95,13 @@ class AppUIConfig:
     # 主页面右侧的交互区域
     class InteractiveZone:
         frame = {
-            'width': 200,
+            'width': 280,
             **WidgetConfig.frame,
         }
 
         padding = {
-            'padx': BaseConfig.PADDING_A,
-            'pady': BaseConfig.PADDING_A,
+            'padx': BaseConfig.PADDING_B,
+            'pady': BaseConfig.PADDING_B,
         }
 
         # 分子式暂存区域
@@ -115,14 +124,14 @@ class AppUIConfig:
         }
 
         padding = {
-            'padx': BaseConfig.PADDING_A,
-            'pady': BaseConfig.PADDING_A,
+            'padx': BaseConfig.PADDING_B,
+            'pady': BaseConfig.PADDING_B,
         }
 
         # 分子式生成页面
         class FormulaGenerationPage:
             input_frame = {
-                'width': 150,
+                'width': 200,
             }
 
             input_entry = {
@@ -139,8 +148,9 @@ class AppUIConfig:
             }
 
             option_menu = {
-                'background': BaseConfig.THIRD_COLOR,
+                'background': '#ffffff',
                 'foreground': BaseConfig.TEXT_DARK,
+                'activebackground': BaseConfig.ACCENT_COLOR,
             }
 
             element_label = {
@@ -162,9 +172,7 @@ class AppUIConfig:
                 'width': 300,
             }
 
-            output_frame = {
-                'relief': tk.GROOVE
-            }
+            output_frame = {}
 
             padding = {
                 'padx': BaseConfig.PADDING_A,

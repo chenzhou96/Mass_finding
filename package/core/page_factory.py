@@ -6,23 +6,20 @@ from ..gui.pages.interface_page import InterfacePage
 
 class PageFactory:
     def __init__(self, root, event_mgr=None):
-        if not hasattr(self, '_initialized'):  # 防止重复初始化
-            self._initialized = True
-            self.root = root
-            self.event_mgr = event_mgr
-            self.page_classes = {
-                'Blank_Page': BlankPage,
-                'Formula_Generation_Page': FormulaGenerationPage,
-                'Formula_Search_Page': FormulaSearchPage,
-                'Interface_1_Page': InterfacePage,  # 需要实现
-                'Interface_2_Page': InterfacePage,  # 需要实现
-                'Interface_3_Page': InterfacePage,  # 需要实现
-                'Interface_4_Page': InterfacePage,  # 需要实现
-                'Interface_5_Page': InterfacePage,  # 需要实现
-                'Interface_6_Page': InterfacePage   # 需要实现
-            }
-
-            self._instances = {}
+        self.root = root
+        self.event_mgr = event_mgr
+        self.page_classes = {
+            'Blank_Page': BlankPage,
+            'Formula_Generation_Page': FormulaGenerationPage,
+            'Formula_Search_Page': FormulaSearchPage,
+            'Interface_1_Page': InterfacePage,  # 需要实现
+            'Interface_2_Page': InterfacePage,  # 需要实现
+            'Interface_3_Page': InterfacePage,  # 需要实现
+            'Interface_4_Page': InterfacePage,  # 需要实现
+            'Interface_5_Page': InterfacePage,  # 需要实现
+            'Interface_6_Page': InterfacePage   # 需要实现
+        }
+        self._instances = {}
 
     def set_root(self, root):
         self.root = root

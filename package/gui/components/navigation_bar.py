@@ -1,6 +1,7 @@
 import tkinter as tk
 import logging
 from ...config.AppUI_config import AppUIConfig
+from ...config.base_config import BaseConfig
 from ...core.event import EventType, EventPriority
 
 class NavigationBar(tk.Frame):
@@ -33,10 +34,11 @@ class NavigationBar(tk.Frame):
             button.pack(side=tk.LEFT, padx=5, pady=5)
 
     def _create_nav_button(self, text, page_name):
-        return self.widget_factory.create_button(
+        return self.widget_factory.create_rounded_button(
             self,
             text=text,
             command=lambda p=page_name, pc=text: self._switch_page(p, pc),
+            hover_bg=BaseConfig.ACCENT_COLOR,
             **AppUIConfig.NavigationBar.button
         )
 
