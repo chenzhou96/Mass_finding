@@ -15,7 +15,7 @@ class NavigationBar(tk.Frame):
 
         # 生成已定义的页面按钮（假设页面配置已更新）
         for page_key in ['page1', 'page2']:  # 根据实际配置调整
-            page_config = getattr(AppUIConfig.NavigationName, page_key)
+            page_config = getattr(AppUIConfig.NavigationBar.PageName, page_key)
             self.buttons[page_config['english']] = self._create_nav_button(
                 page_config['chinese'], 
                 page_config['english']

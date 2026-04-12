@@ -45,6 +45,24 @@ class AppUIConfig:
             'padx': BaseConfig.PADDING_A,
             'pady': BaseConfig.PADDING_A,
         }
+        
+        class PageName:
+            page0 = {
+                'chinese': '空白页',
+                'english': 'Blank_Page',
+            }
+            page1 = {
+                'chinese': '分子式生成',
+                'english': 'Formula_Generation_Page',
+            }
+            page2 = {
+                'chinese': '分子式检索',
+                'english': 'Formula_Search_Page',
+            }
+            page_undefined = {
+                'chinese': '预留接口',
+                'english': 'Interface',
+            }
 
     # 状态栏
     class StatusBar:
@@ -164,21 +182,3 @@ class AppUIConfig:
                 'bg': BaseConfig.BACKGROUND,
                 'fg': BaseConfig.TEXT_DARK,
             }
-
-    class NavigationName:
-        page0 = {
-            'chinese': '空白页',
-            'english': 'Blank_Page',
-        }
-        page1 = {
-            'chinese': '分子式生成',
-            'english': 'Formula_Generation_Page',
-        }
-        page2 = {
-            'chinese': '分子式检索',
-            'english': 'Formula_Search_Page',
-        }
-        page_undefined = {
-            'chinese': '预留接口',
-            'english': 'Interface',
-        }
