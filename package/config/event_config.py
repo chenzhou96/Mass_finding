@@ -5,6 +5,7 @@ class EventType(Enum):
     STATUS_UPDATE = "status_update"
     LOG_MESSAGE = "log_message"
     ADD_FORMULA = "add_formula"
+    ADD_WAITING_FORMULA = "add_waiting_formula"
     ANALYSIS_FAILURE = "analysis_failure"
     VALIDATION_ERROR = "validation_error"
     FILE_LOAD_FAILURE = "file_load_failure"

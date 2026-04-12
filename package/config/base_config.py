@@ -3,7 +3,7 @@ class BaseConfig:
     VERSION = '3.0.0'
 
     # 窗口设置
-    WINDOW_SIZE = '1280x880'
+    WINDOW_SIZE = '1440x880'
 
     # 字体设置
     FONT_STYLE = '微软雅黑'
@@ -18,7 +18,7 @@ class BaseConfig:
     TEXT_DARK = "#141414"       # 近黑（标题文字）
     TEXT_LIGHT = "#6B6B6B"      # 中灰（次要文字）
     ACCENT_COLOR = "#E8E8E8"    # 亮银（强调背景）
-    WARNING_COLOR = "#FFD166"   # 香蕉黄（警告提示）
+    WARNING_COLOR = "#AD7D0C"   # 橙色（警告提示）
     ERROR_COLOR = "#EF476F"     # 珊瑚红（错误提示）
     SUCCESS_COLOR = "#2EC4B6"   # 翡翠绿（成功提示）
 

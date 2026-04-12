@@ -231,11 +231,9 @@ def start_analysis(input_data: Dict[str, Any]) -> Dict[str, Any]:
         }
 
         if result['formulas']:
-            csv_exporter = ExporterFactory.get_exporter('csv_formulaGeneration')
             json_exporter = ExporterFactory.get_exporter('json_formulaGeneration')
-            if csv_exporter is None or json_exporter is None:
+            if json_exporter is None:
                 raise ValueError('未找到生成结果导出器')
-            csv_exporter.export(result)
             data_to_save = json_exporter.export(result)
             logging.info(f'分析完成，结果已保存。耗时 {time.time() - start_time:.2f} 秒')
             return data_to_save

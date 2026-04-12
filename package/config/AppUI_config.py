@@ -114,6 +114,27 @@ class AppUIConfig:
                 'font': (BaseConfig.FONT_STYLE, BaseConfig.FONT_SIZE_SMALL)
             }
 
+            TAG_STYLES = {
+                'DEBUG': {
+                    'foreground': BaseConfig.TEXT_LIGHT,
+                },
+                'INFO': {
+                    'foreground': BaseConfig.TEXT_DARK,
+                },
+                'WARNING': {
+                    'foreground': BaseConfig.WARNING_COLOR,
+                },
+                'ERROR': {
+                    'foreground': BaseConfig.ERROR_COLOR,
+                },
+                'CRITICAL': {
+                    'foreground': BaseConfig.ERROR_COLOR,
+                },
+                'DEFAULT': {
+                    'foreground': BaseConfig.TEXT_DARK,
+                },
+            }
+
             LOG_FORMAT = '%(asctime)s [%(levelname)s]\n%(message)s'
             DATE_FORMAT = '%Y-%m-%d %H:%M:%S'
 

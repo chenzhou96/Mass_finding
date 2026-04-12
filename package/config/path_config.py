@@ -87,6 +87,18 @@ class PathManager:
             self.get_mass_finding_cache_path()
         self.formula_search_cache_path = _get_cache_path(self.mass_finding_cache_path, 'formula_search_cache')
         return self.formula_search_cache_path
+
+    def get_pubchem_raw_cache_path(self) -> Path:
+        if not hasattr(self, 'mass_finding_cache_path'):
+            self.get_mass_finding_cache_path()
+        self.pubchem_raw_cache_path = _get_cache_path(self.mass_finding_cache_path, 'pubchem_raw_cache')
+        return self.pubchem_raw_cache_path
+
+    def get_structure_preview_cache_path(self) -> Path:
+        if not hasattr(self, 'mass_finding_cache_path'):
+            self.get_mass_finding_cache_path()
+        self.structure_preview_cache_path = _get_cache_path(self.mass_finding_cache_path, 'structure_preview_cache')
+        return self.structure_preview_cache_path
     
     def get_initialization_cache_path(self) -> Path:
         if not hasattr(self, 'mass_finding_cache_path'):

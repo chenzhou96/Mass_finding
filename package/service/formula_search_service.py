@@ -1,6 +1,7 @@
 import json
 import logging
 import time
+import datetime
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -44,6 +45,67 @@ def _normalize_formula(formula: str) -> str:
     return formula.strip().replace(' ', '')
 
 
+def _safe_formula_filename(formula: str) -> str:
+    keep = []
+    for ch in formula:
+        if ch.isalnum() or ch in ('_', '-', '.'):
+            keep.append(ch)
+    return ''.join(keep) or 'unknown_formula'
+
+
+def _compound_to_serializable(compound: Any) -> Dict[str, Any]:
+    if isinstance(compound, dict):
+        return compound
+
+    fields = [
+        'cid', 'iupac_name', 'isomeric_smiles', 'canonical_smiles',
+        'inchi', 'inchikey', 'molecular_weight', 'monoisotopic_mass',
+        'synonyms', 'record'
+    ]
+    data: Dict[str, Any] = {}
+    for field in fields:
+        try:
+            value = getattr(compound, field)
+            if value is not None:
+                data[field] = value
+        except Exception:
+            continue
+
+    if hasattr(compound, 'to_dict'):
+        try:
+            data['raw_dict'] = compound.to_dict()
+        except Exception:
+            pass
+
+    return data
+
+
+def _save_pubchem_raw_data(formula: str, compounds: List[Any]):
+    try:
+        path_manager = PathManager()
+        raw_dir = path_manager.get_pubchem_raw_cache_path()
+        timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+        file_name = f"pubchem_raw_{_safe_formula_filename(formula)}_{timestamp}.json"
+        output_path = raw_dir / file_name
+
+        payload = {
+            'metadata': {
+                'formula': formula,
+                'export_time': datetime.datetime.now().isoformat(),
+                'source': 'pubchem_raw',
+                'record_count': len(compounds),
+            },
+            'raw_results': [_compound_to_serializable(item) for item in compounds],
+        }
+
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+
+        logging.info(f"PubChem 原始数据已保存: {output_path}")
+    except Exception as ex:
+        logging.warning(f"保存 PubChem 原始数据失败({formula}): {ex}")
+
+
 def _fetch_pubchem_json(url: str, timeout: int = 30) -> dict:
     request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -77,7 +139,7 @@ def _build_pubchem_compounds_from_cids(cids: List[int], max_records: int = 100) 
     url = (
         'https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/' +
         ','.join(str(cid) for cid in cids) +
-        '/property/' + ','.join(properties[1:]) +
+        '/property/' + ','.join(properties) +
         '/JSON'
     )
     try:
@@ -100,6 +162,25 @@ def _build_pubchem_compounds_from_cids(cids: List[int], max_records: int = 100) 
     except Exception as ex:
         logging.warning(f"PubChem REST 通过 CID 获取属性失败: {ex}")
         return []
+
+
+def _extract_cids_from_compounds(compounds: List[Any]) -> List[int]:
+    cids: List[int] = []
+    for item in compounds:
+        raw_cid = None
+        if isinstance(item, dict):
+            raw_cid = item.get('CID', item.get('cid'))
+        else:
+            raw_cid = getattr(item, 'cid', None)
+
+        try:
+            cid = int(raw_cid)
+        except (TypeError, ValueError):
+            continue
+
+        if cid not in cids:
+            cids.append(cid)
+    return cids
 
 
 def _try_pubchem_formula_search_rest(formula: str, fast: bool = False) -> Optional[List[int]]:
@@ -144,6 +225,10 @@ class FormulaSearchPubChem(FormulaSearch):
             try:
                 compounds = pcp.get_compounds(formula, 'formula')
                 if compounds:
+                    cids = _extract_cids_from_compounds(compounds)
+                    enriched_compounds = _build_pubchem_compounds_from_cids(cids)
+                    if enriched_compounds:
+                        return enriched_compounds
                     return compounds
                 logging.warning(f"{formula} 未匹配到任何化合物")
                 return None
@@ -155,7 +240,7 @@ class FormulaSearchPubChem(FormulaSearch):
                 if 'PUGREST.BadRequest' in message or 'BadRequest' in message:
                     cids = _try_pubchem_formula_search_rest(formula, fast=True)
                     if cids:
-                        compounds = pcp.get_compounds(','.join(str(cid) for cid in cids), 'cid')
+                        compounds = _build_pubchem_compounds_from_cids(cids)
                         if compounds:
                             return compounds
                     cids = _try_pubchem_formula_search_rest(formula, fast=False)
@@ -185,6 +270,7 @@ class SearchManager:
             try:
                 compounds = self.searcher.get_compounds(formula)
                 if compounds:
+                    _save_pubchem_raw_data(formula, compounds)
                     export_data = exporter.export((formula, compounds))
                     results["success"][formula] = export_data
                 else:

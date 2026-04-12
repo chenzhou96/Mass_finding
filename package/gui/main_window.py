@@ -265,8 +265,17 @@ class APP(tk.Tk):
             messagebox.showwarning("发送失败", "请先选中要发送的分子式")
             return
 
-        selected_formulas = [self.formula_bus[i] for i in sorted(self.selected_bus_indices)]
-        self.event_mgr.publish(EventType.ADD_FORMULA, data=selected_formulas, priority=EventPriority.NORMAL)
+        selected_indices = sorted(self.selected_bus_indices)
+        selected_formulas = [self.formula_bus[i] for i in selected_indices]
+        self.event_mgr.publish(EventType.ADD_WAITING_FORMULA, data=selected_formulas, priority=EventPriority.NORMAL)
+
+        for index in sorted(selected_indices, reverse=True):
+            del self.formula_bus[index]
+
+        self.selected_bus_indices = set()
+        self.selection_anchor = None
+        self._update_formula_display()
+
         logging.info(f"发送到待搜索分子式：{', '.join(selected_formulas)}")
         messagebox.showinfo("发送成功", f"已发送 {len(selected_formulas)} 个分子式到待搜索队列")
 
@@ -278,7 +287,7 @@ class APP(tk.Tk):
         )
         self.log_text = scrollable_text["text"]
         # 将日志文本框关联到已存在的 Logger 实例
-        self.logger.text_widget = self.log_text
+        self.logger.set_text_widget(self.log_text)
         event_handler = EventLogHandler(self.event_mgr)
         logging.getLogger().addHandler(event_handler)
 
