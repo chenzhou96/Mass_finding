@@ -4,6 +4,7 @@ import os
 import time
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, List, Optional, Any
 
 from ..config.path_config import PathManager
@@ -69,52 +70,92 @@ def normalize_elements(elements: Dict[str, int], atomic_weights: Dict[str, float
     return items
 
 
-def backtrack_search(target_mw: float, tolerance: float, elements_order: List[tuple], atomic_weights: Dict[str, float], element_categories: Dict[str, List[str]]) -> List[FormulaCandidate]:
-    mw_min = target_mw - target_mw * tolerance
-    mw_max = target_mw + target_mw * tolerance
+def backtrack_search(target_mw: float, tolerance_mw: float, elements_order: List[tuple], atomic_weights: Dict[str, float], element_categories: Dict[str, List[str]]) -> List[FormulaCandidate]:
+    mw_min = target_mw - tolerance_mw
+    mw_max = target_mw + tolerance_mw
     h_weight = atomic_weights.get('H', 1.0)
     results: List[FormulaCandidate] = []
-    h_max = next((count for elem, _, count in elements_order if elem == 'H'), float('inf'))
 
-    def dfs(index: int, remaining_mw: float, current: Dict[str, int]):
-        if index >= len(elements_order):
-            h_count = round(remaining_mw / h_weight)
-            if h_count < 0 or h_count > h_max:
+    h_max = next((count for elem, _, count in elements_order if elem == 'H'), float('inf'))
+    non_h_elements = [(elem, weight, max_count) for elem, weight, max_count in elements_order if elem != 'H']
+
+    def dfs(index: int, current_mw: float, current: Dict[str, int]):
+        if index >= len(non_h_elements):
+            min_h = int(max(0, (mw_min - current_mw) / h_weight))
+            if current_mw + min_h * h_weight < mw_min:
+                min_h += 1
+
+            max_h = int((mw_max - current_mw) / h_weight)
+            if h_max != float('inf'):
+                max_h = min(max_h, int(h_max))
+
+            if max_h < min_h:
                 return
 
-            candidate = FormulaCandidate(
-                formula={**current, 'H': h_count},
-                atomic_weights=atomic_weights,
-                element_categories=element_categories
-            )
-            if candidate.validate_valency() and mw_min <= candidate.predicted_mw <= mw_max:
-                results.append(candidate)
+            for h_count in range(min_h, max_h + 1):
+                candidate = FormulaCandidate(
+                    formula={**current, 'H': h_count},
+                    atomic_weights=atomic_weights,
+                    element_categories=element_categories
+                )
+                if candidate.validate_valency() and mw_min <= candidate.predicted_mw <= mw_max:
+                    results.append(candidate)
             return
 
-        elem, weight, max_count = elements_order[index]
-        max_possible = int(min(remaining_mw / weight, max_count)) if weight > 0 else 0
-        for count in range(max_possible, -1, -1):
-            next_remaining = remaining_mw - count * weight
-            if next_remaining < 0:
-                continue
-            dfs(index + 1, next_remaining, {**current, elem: count})
+        elem, weight, max_count = non_h_elements[index]
+        remaining_budget = mw_max - current_mw
+        if remaining_budget < 0:
+            return
 
-    dfs(0, target_mw, {})
+        max_possible = int(remaining_budget / weight) if weight > 0 else 0
+        if max_count != float('inf'):
+            max_possible = min(max_possible, int(max_count))
+
+        for count in range(max_possible, -1, -1):
+            next_mw = current_mw + count * weight
+            if next_mw > mw_max:
+                continue
+            dfs(index + 1, next_mw, {**current, elem: count})
+
+    dfs(0, 0.0, {})
     return results
 
 
 class FormulaGenerator:
-    def __init__(self, config_path: Optional[str] = None):
-        config_path = config_path or str(PathManager().chem_element_config_path)
+    def __init__(self, config_path: Optional[Path] = None):
+        config_path = config_path or PathManager().chem_element_config_path
         self.config = ReadChemElementConfig(config_path).config
         self.atomic_weights = self.config['atomic_weights']
         self.element_categories = self.config['element_categories']
         self.ion_weights = self.config['ion_weights']
         self.adducts = self.config['adducts']
 
-    def build_formula_results(self, m2z: float, error_pct: float, charge: int, ms_mode: str, selected_adducts: List[str], elements: Dict[str, int]) -> Dict[str, List[dict]]:
+    def build_formula_results(self, m2z: float, error_pct: float, error_da: float, charge: int, ms_mode: str, selected_adducts: List[str], elements: Dict[str, int]) -> Dict[str, List[dict]]:
         order = normalize_elements(elements, self.atomic_weights)
-        mw_tolerance = error_pct / 100
+        pct_tolerance_mz = m2z * (max(error_pct, 0.0) / 100.0)
+        da_tolerance_mz = max(error_da, 0.0)
+        pct_tolerance_mw = pct_tolerance_mz * charge
+        da_tolerance_mw = da_tolerance_mz * charge
+        mw_tolerance = max(pct_tolerance_mw, da_tolerance_mw)
+
+        if mw_tolerance <= 0:
+            logging.warning('误差范围无效：error_pct 与 error_da 不能同时小于等于0。')
+            return {}
+
+        tolerance_source = 'error_pct(%)' if pct_tolerance_mw >= da_tolerance_mw else 'error_da(Da)'
+        logging.info(
+            '误差窗口计算：m/z=%.4f, charge=%d, %%窗口=±%.4f m/z(±%.4f MW), Da窗口=±%.4f m/z(±%.4f MW), 最终采用=%s, 最终窗口=±%.4f m/z(±%.4f MW)',
+            m2z,
+            charge,
+            pct_tolerance_mz,
+            pct_tolerance_mw,
+            da_tolerance_mz,
+            da_tolerance_mw,
+            tolerance_source,
+            mw_tolerance / charge,
+            mw_tolerance,
+        )
+
         results: Dict[str, List[dict]] = {}
 
         tasks = []
@@ -167,6 +208,7 @@ def start_analysis(input_data: Dict[str, Any]) -> Dict[str, Any]:
         selected_adducts = input_data.get('adduct_model', [])
         m2z = float(input_data['m2z'])
         error_pct = float(input_data['error_pct'])
+        error_da = float(input_data.get('error_da', 0.0))
         charge = int(input_data['charge'])
         elements = input_data['elements']
 
@@ -185,7 +227,7 @@ def start_analysis(input_data: Dict[str, Any]) -> Dict[str, Any]:
                 **input_data,
                 'adduct_model': selected_adducts
             },
-            'formulas': generator.build_formula_results(m2z, error_pct, charge, ms_mode, selected_adducts, elements)
+            'formulas': generator.build_formula_results(m2z, error_pct, error_da, charge, ms_mode, selected_adducts, elements)
         }
 
         if result['formulas']:

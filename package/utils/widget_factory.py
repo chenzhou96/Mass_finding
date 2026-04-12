@@ -177,12 +177,14 @@ class WidgetFactory:
         if cooldown is not None and command is not None:
             original_command = command
             duration = int(cooldown * 1000)
+
             def wrapped_command():
-                if getattr(button_command, '_cooldown_active', False):
+                if getattr(parent, '_rounded_btn_cooldown', False):
                     return
-                setattr(button_command, '_cooldown_active', True)
+                setattr(parent, '_rounded_btn_cooldown', True)
                 original_command()
-                parent.after(duration, lambda: setattr(button_command, '_cooldown_active', False))
+                parent.after(duration, lambda: setattr(parent, '_rounded_btn_cooldown', False))
+
             button_command = wrapped_command
 
         rounded_button = RoundedButton(

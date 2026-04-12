@@ -11,7 +11,7 @@ class BaseConfig:
     FONT_SIZE_SMALL = 9
 
     # 黑白银灰高级配色方案
-    PRIMARY_COLOR = "#202020"   # 碳黑（品牌主色）
+    PRIMARY_COLOR = "#302302"   # 碳黑（品牌主色）
     SECONDARY_COLOR = "#B0B0B0" # 银灰（辅助色）
     THIRD_COLOR = "#F4F4F4"     # 轻银灰（卡片背景）
     BACKGROUND = "#FFFFFF"      # 纯白（主背景）

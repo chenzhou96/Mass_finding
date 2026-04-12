@@ -23,9 +23,17 @@ class DataValidator:
             logging.error("参数 m2z 无效或不在50-3000之间")
             return False
 
-        # 验证 error_pct 是否为正数
-        if "error_pct" not in params or not isinstance(params["error_pct"], (int, float)) or params["error_pct"] <= 0:
+        # 验证误差范围参数（% 和 Da）
+        if "error_pct" not in params or not isinstance(params["error_pct"], (int, float)):
             logging.error("参数 error_pct 无效")
+            return False
+
+        if "error_da" not in params or not isinstance(params["error_da"], (int, float)):
+            logging.error("参数 error_da 无效")
+            return False
+
+        if params["error_pct"] <= 0 and params["error_da"] <= 0:
+            logging.error("参数 error_pct 与 error_da 不能同时小于等于0")
             return False
 
         # 验证 charge 是否为正整数
@@ -45,6 +53,8 @@ class DataValidator:
             if not isinstance(count, str):
                 logging.error(f"元素 {element} 的计数无效（非字符串）")
                 return False
+            if count == "不限":
+                continue
             try:
                 int(count)  # 允许负数，验证是否为整数
             except ValueError:

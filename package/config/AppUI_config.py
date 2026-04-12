@@ -73,10 +73,10 @@ class AppUIConfig:
     class StatusBar:
         frame = {
             'bg': BaseConfig.BACKGROUND,
-            'bd': 1,
+            'bd': 0,
             'relief': tk.FLAT,
-            'highlightthickness': 1,
-            'highlightbackground': BaseConfig.SECONDARY_COLOR,
+            'highlightthickness': 0,
+            'highlightbackground': BaseConfig.BACKGROUND,
         }
 
         text = {}

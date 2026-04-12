@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, filedialog
+from tkinter import ttk, filedialog, messagebox
 from .base_page import BasePage
 from ...core.thread_pool import ThreadPool
 from ...service.formulaGeneration import start_analysis
@@ -114,6 +114,8 @@ class FormulaGenerationPage(BasePage):
             cb.grid(row=row, column=col, sticky="w", padx=BaseConfig.PADDING_A, pady=BaseConfig.PADDING_A)
             self.adduct_vars[adduct] = var
 
+        self._refresh_adduct_filter_options()
+
     def _setup_left_frame(self):
 
         # 创建样式
@@ -127,6 +129,11 @@ class FormulaGenerationPage(BasePage):
         def create_input_frame(parent, text, row):
             frame = self.widget_factory.create_labelframe(parent, text=text)
             frame.grid(row=row, column=0, sticky="ew")
+            return frame
+
+        def create_grid_input_frame(parent, text, row, col):
+            frame = self.widget_factory.create_labelframe(parent, text=text)
+            frame.grid(row=row, column=col, sticky="ew", padx=BaseConfig.PADDING_A, pady=BaseConfig.PADDING_A)
             return frame
 
         # 质谱模式框架
@@ -144,32 +151,41 @@ class FormulaGenerationPage(BasePage):
         )
         option_menu.pack(side=tk.LEFT, **AppUIConfig.FunctionZone.FormulaGenerationPage.padding)
         
-        # m/z值输入框
-        m2z_frame = create_input_frame(self.left_frame, "m/z值", 2)
+        # 参数输入区（2x2布局）
+        params_frame = create_input_frame(self.left_frame, "参数输入", 2)
+        params_frame.columnconfigure(0, weight=1)
+        params_frame.columnconfigure(1, weight=1)
+
+        # 第一行：m/z值、电荷数
+        m2z_frame = create_grid_input_frame(params_frame, "m/z值", 0, 0)
         self.m2z = tk.DoubleVar(value=100)
         entry = self.widget_factory.create_entry(m2z_frame, textvariable=self.m2z, **AppUIConfig.FunctionZone.FormulaGenerationPage.input_entry)
         entry.pack(**AppUIConfig.FunctionZone.FormulaGenerationPage.padding)
-        
-        # 误差范围输入框
-        error_frame = create_input_frame(self.left_frame, "误差范围 (%)", 3)
+
+        charge_frame = create_grid_input_frame(params_frame, "电荷数", 0, 1)
+        self.charge = tk.IntVar(value=1)
+        entry = self.widget_factory.create_entry(charge_frame, textvariable=self.charge, **AppUIConfig.FunctionZone.FormulaGenerationPage.input_entry)
+        entry.pack(**AppUIConfig.FunctionZone.FormulaGenerationPage.padding)
+
+        # 第二行：误差范围（%）、误差范围（Da）
+        error_frame = create_grid_input_frame(params_frame, "误差范围 (%)", 1, 0)
         self.error_pct = tk.DoubleVar(value=0.1)
         entry = self.widget_factory.create_entry(error_frame, textvariable=self.error_pct, **AppUIConfig.FunctionZone.FormulaGenerationPage.input_entry)
         entry.pack(**AppUIConfig.FunctionZone.FormulaGenerationPage.padding)
-        
-        # 电荷数输入框
-        charge_frame = create_input_frame(self.left_frame, "电荷数", 4)
-        self.charge = tk.IntVar(value=1)
-        entry = self.widget_factory.create_entry(charge_frame, textvariable=self.charge, **AppUIConfig.FunctionZone.FormulaGenerationPage.input_entry)
+
+        error_da_frame = create_grid_input_frame(params_frame, "误差范围 (Da)", 1, 1)
+        self.error_da = tk.DoubleVar(value=0.0)
+        entry = self.widget_factory.create_entry(error_da_frame, textvariable=self.error_da, **AppUIConfig.FunctionZone.FormulaGenerationPage.input_entry)
         entry.pack(**AppUIConfig.FunctionZone.FormulaGenerationPage.padding)
 
         # 元素配置区优化
         elements = ["C", "N", "O", "S", "P", "Si", "F", "Cl", "Br", "I", "B", "Se"]
         self.element_vars = {
-            e: tk.StringVar(value="-1" if e in {"C", "N", "O"} else "0") 
+            e: tk.StringVar(value="不限" if e in {"C", "N", "O"} else "0") 
             for e in elements
         }
 
-        self.elements_frame = create_input_frame(self.left_frame, "元素配置(不超过)", 5)
+        self.elements_frame = create_input_frame(self.left_frame, "元素配置(不超过)", 3)
         self.elements_frame.grid_propagate(True)
         self.elements_frame.columnconfigure(0, weight=0)
         self.elements_frame.columnconfigure(1, weight=1)
@@ -209,12 +225,16 @@ class FormulaGenerationPage(BasePage):
         table_frame.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=True)
 
         # 筛选栏设置
-        first_row = ["M/Z", "DBR", "C", "H", "N", "O", "S", "P"]
-        second_row = ["Adduct", "Si", "F", "Cl", "Br", "I", "B", "Se"]
-        columns = first_row + second_row + ['Mol Weight']
+        filter_rows = [
+            ["Adduct", "M/Z", "DBR", "C"],
+            ["H", "N", "O", "S"],
+            ["P", "Si", "F", "Cl"],
+            ["Br", "I", "B", "Se"],
+        ]
+        columns = [col for row in filter_rows for col in row] + ['Mol Weight']
 
         self.filters = {}
-        for row_idx, row_columns in enumerate([first_row, second_row]):
+        for row_idx, row_columns in enumerate(filter_rows):
             for col_idx, col_name in enumerate(row_columns):
                 labelframe = self.widget_factory.create_labelframe(
                     filter_frame,
@@ -227,13 +247,15 @@ class FormulaGenerationPage(BasePage):
                     entry = ttk.Combobox(
                         labelframe,
                         textvariable=var,
-                        values=[""],
-                        state='normal',
+                        values=[],
+                        state='readonly',
                         width=12,
                         font=(BaseConfig.FONT_STYLE, BaseConfig.FONT_SIZE)
                     )
                     entry.pack(fill=tk.X, **AppUIConfig.FunctionZone.FormulaGenerationPage.padding)
                     var.trace_add("write", self._apply_filters)
+                    self.adduct_filter_var = var
+                    self.adduct_filter_combo = entry
                     self.filters[col_name] = {'type': 'text', 'var': var}
                 else:
                     min_var = tk.StringVar()
@@ -269,7 +291,7 @@ class FormulaGenerationPage(BasePage):
                     }
 
         # 确保列权重均匀分布
-        max_cols = max(len(first_row), len(second_row))
+        max_cols = max(len(row) for row in filter_rows)
         for col in range(max_cols):
             filter_frame.grid_columnconfigure(col, weight=1)
 
@@ -302,6 +324,24 @@ class FormulaGenerationPage(BasePage):
         self.table.bind("<Button-3>", self._on_table_right_click)
 
         self.table.bind("<Double-1>", self._on_table_double_click)
+        self._refresh_adduct_filter_options()
+
+    def _refresh_adduct_filter_options(self):
+        if not hasattr(self, 'adduct_filter_combo') or not hasattr(self, 'adduct_filter_var'):
+            return
+
+        mode_adducts = self._get_adduct_config().get(self.ms_mode.get(), [])
+        data_adducts = [
+            str(item.get("Adduct", "")).strip()
+            for item in getattr(self, 'data', [])
+            if str(item.get("Adduct", "")).strip()
+        ]
+        options = list(dict.fromkeys(mode_adducts + data_adducts))
+
+        self.adduct_filter_combo.configure(values=options)
+        current_val = self.adduct_filter_var.get().strip()
+        if current_val and current_val not in options:
+            self.adduct_filter_var.set("")
 
     def _update_hidden_columns(self):
         visible_cols = ["M/Z", "Adduct", "Mol Weight", "DBR"]
@@ -356,6 +396,7 @@ class FormulaGenerationPage(BasePage):
                     raise TypeError("results字段必须为数组类型")
                 
                 self.data = self._map_data(data["results"])
+                self._refresh_adduct_filter_options()
                 self._apply_filters()
                 self.auto_resize_columns()
                 self._update_hidden_columns()
@@ -379,6 +420,7 @@ class FormulaGenerationPage(BasePage):
                 logging.info(f"- 加合离子: {', '.join(data['input_params']['adduct_model'])}")
                 logging.info(f"- m/z: {data['input_params']['m2z']}")
                 logging.info(f"- 误差范围: ±{data['input_params']['error_pct']}%")
+                logging.info(f"- 误差范围: ±{data['input_params'].get('error_da', 0)} Da")
                 logging.info(f"- 电荷数: {data['input_params']['charge']}")
                 logging.info(f"- 元素配置: {element_config_str}")
                 
@@ -396,42 +438,56 @@ class FormulaGenerationPage(BasePage):
 
     def _setup_buttons(self):
         btn_frame = self.widget_factory.create_frame(self.left_frame)
-        btn_frame.grid(row=6, column=0, sticky="ew", pady=(BaseConfig.PADDING_B, 0))
-        for idx in range(3):
+        btn_frame.grid(row=4, column=0, sticky="ew", pady=(BaseConfig.PADDING_B, 0))
+        for idx in range(2):
             btn_frame.grid_columnconfigure(idx, weight=1)
+        for idx in range(2):
+            btn_frame.grid_rowconfigure(idx, weight=1)
 
         btn_run = self.widget_factory.create_rounded_button(
             btn_frame,
             text="开始分析",
             command=self._run_analysis,
             cooldown=3,
-            width=14,
-            height=2,
+            width="92",
+            height="34",
             hover_bg=BaseConfig.ACCENT_COLOR,
         )
-        btn_run.grid(row=0, column=0, sticky="ew", padx=(0, BaseConfig.PADDING_A))
+        btn_run.grid(row=0, column=0, sticky="ew", padx=(0, BaseConfig.PADDING_A), pady=(0, BaseConfig.PADDING_A))
 
         btn_open = self.widget_factory.create_rounded_button(
             btn_frame,
             text="导入文件",
             command=self._open_json_file,
             cooldown=3,
-            width=14,
-            height=2,
+            width="92",
+            height="34",
             hover_bg=BaseConfig.ACCENT_COLOR,
         )
-        btn_open.grid(row=0, column=1, sticky="ew", padx=BaseConfig.PADDING_A)
+        btn_open.grid(row=0, column=1, sticky="ew", padx=(BaseConfig.PADDING_A, 0), pady=(0, BaseConfig.PADDING_A))
 
         btn_refresh = self.widget_factory.create_rounded_button(
             btn_frame,
             text="刷新页面",
             command=self._refresh_page,
             cooldown=3,
-            width=14,
-            height=2,
+            width="92",
+            height="34",
             hover_bg=BaseConfig.ACCENT_COLOR,
         )
-        btn_refresh.grid(row=0, column=2, sticky="ew", padx=(BaseConfig.PADDING_A, 0))
+        btn_refresh.grid(row=1, column=0, sticky="ew", padx=(0, BaseConfig.PADDING_A), pady=(BaseConfig.PADDING_A, 0))
+
+        btn_placeholder = self.widget_factory.create_rounded_button(
+            btn_frame,
+            text="",
+            command=lambda: None,
+            cooldown=0,
+            width="92",
+            height="34",
+            hover_bg=BaseConfig.PRIMARY_COLOR,
+        )
+        btn_placeholder.config(state=tk.DISABLED)
+        btn_placeholder.grid(row=1, column=1, sticky="ew", padx=(BaseConfig.PADDING_A, 0), pady=(BaseConfig.PADDING_A, 0))
 
     def _refresh_page(self):
         self.event_mgr.publish(
@@ -443,11 +499,12 @@ class FormulaGenerationPage(BasePage):
         self.ms_mode.set("ESI+")
         self.m2z.set(100)
         self.error_pct.set(0.1)
+        self.error_da.set(0.0)
         self.charge.set(1)
         
         # 2. 重置元素配置
         for elem in self.element_vars:
-            self.element_vars[elem].set("-1" if elem in {"C", "N", "O"} else "0")
+            self.element_vars[elem].set("不限" if elem in {"C", "N", "O"} else "0")
         
         # 3. 重置加合物选项
         self.adduct_vars = {}
@@ -455,6 +512,7 @@ class FormulaGenerationPage(BasePage):
         
         # 4. 清空表格数据
         self.data = []
+        self._refresh_adduct_filter_options()
         self.table.delete(*self.table.get_children())
         
         # 5. 清除筛选条件
@@ -491,6 +549,7 @@ class FormulaGenerationPage(BasePage):
             "adduct_model": [k for k, v in self.adduct_vars.items() if v.get()],
             "m2z": self.m2z.get(),
             "error_pct": self.error_pct.get(),
+            "error_da": self.error_da.get(),
             "charge": self.charge.get(),
             "elements": {k: v.get() for k, v in self.element_vars.items()}
         }
@@ -515,6 +574,7 @@ class FormulaGenerationPage(BasePage):
         try:
             result = start_analysis(params)
             self.data = self._map_data(result["results"])
+            self.after(0, self._refresh_adduct_filter_options)
             self.after(0, self._apply_filters)
             self.after(0, self.auto_resize_columns)
             self.after(0, self._update_hidden_columns)
@@ -628,17 +688,7 @@ class FormulaGenerationPage(BasePage):
             logging.error(f"无法解析数据项: {e}")
             return
 
-        # 提取元素生成化学式
-        elements_order = ['C', 'H', 'N', 'O', 'S', 'P', 'Si', 'F', 'Cl', 'Br', 'I', 'B', 'Se']
-        formula = []
-        for elem in elements_order:
-            count = data.get(elem, '0')
-            if count != 0:
-                if count == 1:
-                    formula.append(f'{elem}')
-                else:
-                    formula.append(f"{elem}{count}")
-        formula_str = ''.join(formula)
+        formula_str = self._formula_from_row_data(data)
 
         # 发送事件
         self.event_mgr.publish(EventType.ADD_FORMULA, data=formula_str, priority=EventPriority.NORMAL)
@@ -706,8 +756,16 @@ class FormulaGenerationPage(BasePage):
         elements_order = ['C', 'H', 'N', 'O', 'S', 'P', 'Si', 'F', 'Cl', 'Br', 'I', 'B', 'Se']
         formula = []
         for elem in elements_order:
-            count = data.get(elem, '0')
-            if count != 0:
+            raw_count = data.get(elem, 0)
+            if raw_count in ("", None):
+                count = 0
+            else:
+                try:
+                    count = int(float(raw_count))
+                except (ValueError, TypeError):
+                    count = 0
+
+            if count > 0:
                 if count == 1:
                     formula.append(f'{elem}')
                 else:

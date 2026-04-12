@@ -16,6 +16,14 @@ class CSVExporter_formulaGeneration:
             path_manager.get_mass_finding_cache_path()
             csv_path = os.path.join(path_manager.get_formula_generation_cache_path(), f'mass_data_{timestamp}.csv')
 
+            def _extract_formula_payload(formula_item: dict):
+                element_counts = formula_item.get('formula', formula_item.get('elements', {}))
+                calc = formula_item.get('calculated_properties', {})
+                dbr = calc.get('dbr', formula_item.get('dbr', 0.0))
+                predicted_mz = calc.get('predicted_mz', formula_item.get('mz', 0.0))
+                molecular_weight = calc.get('molecular_weight', formula_item.get('predicted_mw', 0.0))
+                return element_counts, dbr, predicted_mz, molecular_weight
+
             # 修改编码为 utf-8-sig 解决中文乱码
             with open(csv_path, 'w', newline='', encoding='utf-8') as f:
                 writer = csv.writer(f)
@@ -27,6 +35,7 @@ class CSVExporter_formulaGeneration:
                     f"adduct_model: {', '.join(input_params['adduct_model'])}",
                     f"m/z: {input_params['m2z']}",
                     f"error: {input_params['error_pct']}%",
+                    f"error_da: {input_params.get('error_da', 0)}Da",
                     f"charge: {input_params['charge']}",
                     f"elements: {input_params['elements']}",
                     
@@ -42,24 +51,25 @@ class CSVExporter_formulaGeneration:
                 # 更新数据行添加分子量
                 for adduct, formulas in results["formulas"].items():
                     for formula in formulas:
+                        element_counts, dbr, predicted_mz, molecular_weight = _extract_formula_payload(formula)
                         writer.writerow([
-                            formula['elements'].get('C', 0),
-                            formula['elements'].get('H', 0),
-                            formula['elements'].get('O', 0), 
-                            formula['elements'].get('N', 0),
-                            formula['elements'].get('S', 0),
-                            formula['elements'].get('P', 0),
-                            formula['elements'].get('Si', 0),
-                            formula['elements'].get('B', 0),
-                            formula['elements'].get('Se', 0),
-                            formula['elements'].get('F', 0),
-                            formula['elements'].get('Cl', 0),
-                            formula['elements'].get('Br', 0),
-                            formula['elements'].get('I', 0),
+                            element_counts.get('C', 0),
+                            element_counts.get('H', 0),
+                            element_counts.get('O', 0), 
+                            element_counts.get('N', 0),
+                            element_counts.get('S', 0),
+                            element_counts.get('P', 0),
+                            element_counts.get('Si', 0),
+                            element_counts.get('B', 0),
+                            element_counts.get('Se', 0),
+                            element_counts.get('F', 0),
+                            element_counts.get('Cl', 0),
+                            element_counts.get('Br', 0),
+                            element_counts.get('I', 0),
                             adduct,
-                            f"{formula['dbr']:.1f}",
-                            f"{formula['mz']:.4f}",
-                            f"{formula['predicted_mw']:.4f}"  # 新增分子量数据
+                            f"{float(dbr):.1f}",
+                            f"{float(predicted_mz):.4f}",
+                            f"{float(molecular_weight):.4f}"  # 新增分子量数据
                         ])
 
             logging.info(f"CSV 文件已成功导出: {csv_path}")
@@ -75,6 +85,14 @@ class JSONExporter_formulaGeneration:
             path_manager.get_mass_finding_cache_path()
             json_path = os.path.join(path_manager.get_formula_generation_cache_path(), f'mass_data_{timestamp}.json')
 
+            def _extract_formula_payload(formula_item: dict):
+                element_counts = formula_item.get('formula', formula_item.get('elements', {}))
+                calc = formula_item.get('calculated_properties', {})
+                dbr = calc.get('dbr', formula_item.get('dbr', 0.0))
+                predicted_mz = calc.get('predicted_mz', formula_item.get('mz', 0.0))
+                molecular_weight = calc.get('molecular_weight', formula_item.get('predicted_mw', 0.0))
+                return element_counts, dbr, predicted_mz, molecular_weight
+
             # 构建完整数据结构
             data_to_save = {
                 "metadata": {
@@ -88,13 +106,14 @@ class JSONExporter_formulaGeneration:
             # 重组结果数据
             for adduct_type, formulas in results["formulas"].items():
                 for formula in formulas:
+                    element_counts, dbr, predicted_mz, molecular_weight = _extract_formula_payload(formula)
                     data_to_save["results"].append({
-                        "formula": formula['elements'],
+                        "formula": element_counts,
                         "adduct_type": adduct_type,
                         "calculated_properties": {
-                            "dbr": formula['dbr'],
-                            "predicted_mz": formula['mz'],
-                            "molecular_weight": formula['predicted_mw']
+                            "dbr": dbr,
+                            "predicted_mz": predicted_mz,
+                            "molecular_weight": molecular_weight
                         }
                     })
 
