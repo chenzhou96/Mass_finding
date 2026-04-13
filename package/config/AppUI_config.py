@@ -95,7 +95,6 @@ class AppUIConfig:
     # 主页面右侧的交互区域
     class InteractiveZone:
         frame = {
-            'width': 280,
             **WidgetConfig.frame,
         }
 
@@ -152,7 +151,6 @@ class AppUIConfig:
         # 分子式生成页面
         class FormulaGenerationPage:
             input_frame = {
-                'width': 200,
             }
 
             input_entry = {
@@ -190,7 +188,6 @@ class AppUIConfig:
         # 分子式搜索页面
         class FormulaSearchPage:
             input_frame = {
-                'width': 300,
             }
 
             output_frame = {}

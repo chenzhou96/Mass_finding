@@ -17,6 +17,8 @@ from ...service.formulaSearch import start_search
 class FormulaSearchPage(BasePage):
     def __init__(self, parent, event_mgr):
         super().__init__(parent, event_mgr, title="Formula Search")
+        self._layout_ratio = (2, 5)
+        self._detail_ratio = (1, 2)
         self.event_mgr.publish(
             EventType.STATUS_UPDATE, 
             data={"status_text": "loading..."}
@@ -26,13 +28,13 @@ class FormulaSearchPage(BasePage):
         self.right_frame = self.widget_factory.create_frame(self, **AppUIConfig.FunctionZone.FormulaSearchPage.output_frame)
 
         # 使用网格布局
-        self.grid_columnconfigure(0, weight=0)
-        self.grid_columnconfigure(1, weight=1)
+        self.grid_columnconfigure(0, weight=2)
+        self.grid_columnconfigure(1, weight=5)
         self.grid_rowconfigure(0, weight=1)
 
-        self.left_frame.grid(row=0, column=0, sticky="nsw")
-        self.left_frame.grid_propagate(False)  # 禁用自动调整
+        self.left_frame.grid(row=0, column=0, sticky="nsew")
         self.right_frame.grid(row=0, column=1, sticky="nsew")
+        self.bind("<Configure>", self._on_page_resize)
 
         self._setup_left_frame()
         self._load_cached_formulas()
@@ -45,6 +47,17 @@ class FormulaSearchPage(BasePage):
             EventType.STATUS_UPDATE, 
             data={"status_text": "done"}
         )
+
+    def _on_page_resize(self, event):
+        left_ratio, right_ratio = self._layout_ratio
+        total_ratio = left_ratio + right_ratio
+        if event.width <= 1 or total_ratio <= 0:
+            return
+
+        left_width = max(0, int(event.width * left_ratio / total_ratio))
+        right_width = max(0, event.width - left_width)
+        self.grid_columnconfigure(0, minsize=left_width)
+        self.grid_columnconfigure(1, minsize=right_width)
 
     def _page_init(self):
         self.widget_factory = WidgetFactory()
@@ -105,7 +118,6 @@ class FormulaSearchPage(BasePage):
     def _setup_left_frame(self):
         def setup_labelframe(frame, title, **kwargs):
             labelframe = self.widget_factory.create_labelframe(frame, text=title, **AppUIConfig.FunctionZone.FormulaSearchPage.labelframe, **kwargs)
-            labelframe.pack_propagate(0)
             text_widget = self.widget_factory.create_scrollable_text(labelframe, **AppUIConfig.FunctionZone.FormulaSearchPage.text)
             text_widget["scrollbar"].pack(side=tk.RIGHT, fill=tk.Y)
             text_widget["text"].pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -150,15 +162,16 @@ class FormulaSearchPage(BasePage):
         self.info_label = self.widget_factory.create_label(self.right_frame, text=labelname, **AppUIConfig.FunctionZone.FormulaSearchPage.right_label)
         self.info_label.pack(side=tk.TOP, fill=tk.X)
 
-        result_frame = self.widget_factory.create_labelframe(self.right_frame, text="分子式详情")
-        result_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=BaseConfig.PADDING_A, pady=BaseConfig.PADDING_A)
-        result_frame.grid_columnconfigure(0, weight=2, minsize=320)
-        result_frame.grid_columnconfigure(1, weight=3, minsize=420)
-        result_frame.grid_rowconfigure(1, weight=2)
-        result_frame.grid_rowconfigure(2, weight=3)
+        self.result_frame = self.widget_factory.create_labelframe(self.right_frame, text="分子式详情")
+        self.result_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=BaseConfig.PADDING_A, pady=BaseConfig.PADDING_A)
+        self.result_frame.grid_columnconfigure(0, weight=1, minsize=220)
+        self.result_frame.grid_columnconfigure(1, weight=2, minsize=320)
+        self.result_frame.grid_rowconfigure(1, weight=2)
+        self.result_frame.grid_rowconfigure(2, weight=3)
+        self.result_frame.bind("<Configure>", self._on_detail_resize)
 
         self.formula_info_label = self.widget_factory.create_label(
-            result_frame,
+            self.result_frame,
             text="请选择本地已有或搜索成功分子式查看详情",
             anchor='w',
             justify='left'
@@ -172,7 +185,7 @@ class FormulaSearchPage(BasePage):
             pady=(BaseConfig.PADDING_A, 0)
         )
 
-        compound_list_frame = self.widget_factory.create_labelframe(result_frame, text="化合物列表")
+        compound_list_frame = self.widget_factory.create_labelframe(self.result_frame, text="化合物列表")
         compound_list_frame.grid(
             row=1,
             column=0,
@@ -189,7 +202,7 @@ class FormulaSearchPage(BasePage):
         self.compound_listbox.config(yscrollcommand=compound_scroll.set)
         self.compound_listbox.bind('<<ListboxSelect>>', self._on_compound_select)
 
-        result_text_frame = self.widget_factory.create_labelframe(result_frame, text="化合物信息")
+        result_text_frame = self.widget_factory.create_labelframe(self.result_frame, text="化合物信息")
         result_text_frame.grid(
             row=2,
             column=0,
@@ -204,7 +217,7 @@ class FormulaSearchPage(BasePage):
         self.result_text = result_widget["text"]
         self.result_text.config(state=tk.DISABLED)
 
-        preview_frame = self.widget_factory.create_labelframe(result_frame, text="结构式预览")
+        preview_frame = self.widget_factory.create_labelframe(self.result_frame, text="结构式预览")
         preview_frame.grid(
             row=2,
             column=1,
@@ -229,6 +242,17 @@ class FormulaSearchPage(BasePage):
         self.structure_image_label.bind('<Double-1>', self._open_structure_image)
 
         self.current_formula_results = []
+
+    def _on_detail_resize(self, event):
+        left_ratio, right_ratio = self._detail_ratio
+        total_ratio = left_ratio + right_ratio
+        if event.width <= 1 or total_ratio <= 0:
+            return
+
+        info_width = max(0, int(event.width * left_ratio / total_ratio))
+        preview_width = max(0, event.width - info_width)
+        self.result_frame.grid_columnconfigure(0, minsize=info_width)
+        self.result_frame.grid_columnconfigure(1, minsize=preview_width)
 
     def _update_formula_display(self, formula_type, formula_list):
         """根据列表内容更新文本框显示"""

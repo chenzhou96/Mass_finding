@@ -19,6 +19,7 @@ class FormulaGenerationPage(BasePage):
 
     def __init__(self, parent, event_mgr):
         super().__init__(parent, event_mgr, title="Formula Generation")
+        self._layout_ratio = (2, 5)
         self.event_mgr.publish(
             EventType.STATUS_UPDATE, 
             data={"status_text": "loading..."}
@@ -34,13 +35,15 @@ class FormulaGenerationPage(BasePage):
         self.adduct_vars = {}  # 重置为字典存储当前选中的加合物
 
         # 使用网格布局
-        self.grid_columnconfigure(0, weight=0)
-        self.grid_columnconfigure(1, weight=1)
+        self.grid_columnconfigure(0, weight=2)
+        self.grid_columnconfigure(1, weight=5)
         self.grid_rowconfigure(0, weight=1)
 
-        self.left_frame.grid(row=0, column=0, sticky="nsw")
-        self.left_frame.grid_propagate(False)  # 禁用自动调整
+        self.left_frame.grid(row=0, column=0, sticky="nsew")
         self.right_frame.grid(row=0, column=1, sticky="nsew")
+        self.bind("<Configure>", self._on_page_resize)
+
+        self._setup_left_scrollable_container()
 
         # 初始化所有控件
         self._setup_left_frame()
@@ -56,13 +59,48 @@ class FormulaGenerationPage(BasePage):
         # 初始化加合物选项
         self._on_ms_mode_change()
 
-        # 绑定窗口调整事件
-        self.bind("<Configure>", self.on_window_resize)
-
         self.event_mgr.publish(
             EventType.STATUS_UPDATE, 
             data={"status_text": "done"}
         )
+
+    def _setup_left_scrollable_container(self):
+        self.left_frame.grid_rowconfigure(0, weight=1)
+        self.left_frame.grid_columnconfigure(0, weight=1)
+
+        self.left_canvas = self.widget_factory.create_canvas(self.left_frame, highlightthickness=0)
+        self.left_scrollbar = tk.Scrollbar(self.left_frame, orient=tk.VERTICAL, command=self.left_canvas.yview)
+        self.left_canvas.configure(yscrollcommand=self.left_scrollbar.set)
+
+        self.left_canvas.grid(row=0, column=0, sticky="nsew")
+        self.left_scrollbar.grid(row=0, column=1, sticky="ns")
+
+        self.left_content_frame = self.widget_factory.create_frame(self.left_canvas)
+        self.left_canvas_window = self.left_canvas.create_window((0, 0), window=self.left_content_frame, anchor="nw")
+
+        self.left_content_frame.bind("<Configure>", self._on_left_content_configure)
+        self.left_canvas.bind("<Configure>", self._on_left_canvas_configure)
+        self.left_canvas.bind("<MouseWheel>", self._on_left_mousewheel)
+
+    def _on_left_content_configure(self, _event):
+        self.left_canvas.configure(scrollregion=self.left_canvas.bbox("all"))
+
+    def _on_left_canvas_configure(self, event):
+        self.left_canvas.itemconfigure(self.left_canvas_window, width=event.width)
+
+    def _on_left_mousewheel(self, event):
+        self.left_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+    def _on_page_resize(self, event):
+        left_ratio, right_ratio = self._layout_ratio
+        total_ratio = left_ratio + right_ratio
+        if event.width <= 1 or total_ratio <= 0:
+            return
+
+        left_width = max(0, int(event.width * left_ratio / total_ratio))
+        right_width = max(0, event.width - left_width)
+        self.grid_columnconfigure(0, minsize=left_width)
+        self.grid_columnconfigure(1, minsize=right_width)
 
     def _get_adduct_config(self):
         if not self.adducts_config:
@@ -90,7 +128,7 @@ class FormulaGenerationPage(BasePage):
             self.adduct_frame = None
         
         # 创建新框架
-        self.adduct_frame = self.widget_factory.create_labelframe(self.left_frame, text="加合物模型")
+        self.adduct_frame = self.widget_factory.create_labelframe(self.left_content_frame, text="加合物模型")
         self.adduct_frame.grid(row=1, column=0, sticky="ew")
         
         # 启动网格布局
@@ -123,9 +161,8 @@ class FormulaGenerationPage(BasePage):
         style = ttk.Style()
         style.configure("TMenubutton", **AppUIConfig.FunctionZone.FormulaGenerationPage.option_menu)
 
-        # 初始化网格布局并禁用自动调整
-        self.left_frame.columnconfigure(0, weight=1)
-        self.left_frame.grid_propagate(False)  # 禁止子组件影响框架尺寸
+        # 初始化网格布局
+        self.left_content_frame.columnconfigure(0, weight=1)
 
         def create_input_frame(parent, text, row):
             frame = self.widget_factory.create_labelframe(parent, text=text)
@@ -138,7 +175,7 @@ class FormulaGenerationPage(BasePage):
             return frame
 
         # 质谱模式框架
-        ms_mode_frame = create_input_frame(self.left_frame, "质谱模式", 0)
+        ms_mode_frame = create_input_frame(self.left_content_frame, "质谱模式", 0)
         self.ms_mode = tk.StringVar(value="ESI+")
         self.ms_mode.trace_add("write", self._on_ms_mode_change)
         
@@ -153,7 +190,7 @@ class FormulaGenerationPage(BasePage):
         option_menu.pack(side=tk.LEFT, **AppUIConfig.FunctionZone.FormulaGenerationPage.padding)
         
         # 参数输入区（2x2布局）
-        params_frame = create_input_frame(self.left_frame, "参数输入", 2)
+        params_frame = create_input_frame(self.left_content_frame, "参数输入", 2)
         params_frame.columnconfigure(0, weight=1)
         params_frame.columnconfigure(1, weight=1)
 
@@ -186,7 +223,7 @@ class FormulaGenerationPage(BasePage):
             for e in elements
         }
 
-        self.elements_frame = create_input_frame(self.left_frame, "元素配置(不超过)", 3)
+        self.elements_frame = create_input_frame(self.left_content_frame, "元素配置(不超过)", 3)
         self.elements_frame.grid_propagate(True)
         self.elements_frame.columnconfigure(0, weight=0)
         self.elements_frame.columnconfigure(1, weight=1)
@@ -973,7 +1010,7 @@ class FormulaGenerationPage(BasePage):
         )
 
     def _setup_buttons(self):
-        btn_frame = self.widget_factory.create_frame(self.left_frame)
+        btn_frame = self.widget_factory.create_frame(self.left_content_frame)
         btn_frame.grid(row=4, column=0, sticky="ew", pady=(BaseConfig.PADDING_B, 0))
         for idx in range(2):
             btn_frame.grid_columnconfigure(idx, weight=1)
@@ -1280,13 +1317,6 @@ class FormulaGenerationPage(BasePage):
         }
         self._add_filter_condition_row(preset=preset)
         self.filter_feedback_label.configure(text=f"已从表格添加草稿条件: {column_name} {preset['operator']} {cell_value}")
-
-    def on_window_resize(self, event):
-        # 动态调整元素配置区高度
-        if hasattr(self, 'elements_frame'):
-            self.elements_frame.config(
-                height=int(event.height * 0.3)
-            )
 
     def _on_table_double_click(self, event):
         item = self.table.selection()

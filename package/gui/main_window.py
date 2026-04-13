@@ -16,6 +16,8 @@ from ..config.path_config import PathManager
 
 class APP(tk.Tk):
     def __init__(self):
+        self._mid_ratio = (3, 1)
+        self._right_ratio = (1, 1)
         self.path_manager = PathManager()
         self._init_window()
         self._init_components()
@@ -82,21 +84,35 @@ class APP(tk.Tk):
             self,
             **AppUIConfig.StatusBar.frame
         )
-        self.left_frame = self.widget_factory.create_frame(
+        self.main_paned = self.widget_factory.create_paned_window(
             self.mid_frame,
+            orient=tk.HORIZONTAL,
+            sashrelief=tk.FLAT,
+            showhandle=False,
+            opaqueresize=True,
+        )
+        self.left_frame = self.widget_factory.create_frame(
+            self.main_paned,
             **AppUIConfig.FunctionZone.frame
         )
         self.right_frame = self.widget_factory.create_frame(
-            self.mid_frame,
+            self.main_paned,
             **AppUIConfig.InteractiveZone.frame
         )
-        self.upper_frame = self.widget_factory.create_labelframe(
+        self.right_paned = self.widget_factory.create_paned_window(
             self.right_frame,
+            orient=tk.VERTICAL,
+            sashrelief=tk.FLAT,
+            showhandle=False,
+            opaqueresize=True,
+        )
+        self.upper_frame = self.widget_factory.create_labelframe(
+            self.right_paned,
             text='分子式 bus',
             **AppUIConfig.InteractiveZone.frame
         )
         self.lower_frame = self.widget_factory.create_labelframe(
-            self.right_frame,
+            self.right_paned,
             text='操作日志',
             **AppUIConfig.InteractiveZone.frame
         )
@@ -301,18 +317,21 @@ class APP(tk.Tk):
             padx=BaseConfig.PADDING_C,
             pady=(BaseConfig.PADDING_B, 0)
         )
+        self.status_frame.pack(
+            side=tk.BOTTOM,
+            fill=tk.X,
+            padx=BaseConfig.PADDING_C,
+            pady=(0, BaseConfig.PADDING_B)
+        )
+        # 先为状态栏预留高度，避免被中间可伸缩区域挤压
+        self.status_frame.configure(height=28)
+        self.status_frame.pack_propagate(False)
         self.mid_frame.pack(
             side=tk.TOP,
             fill=tk.BOTH,
             expand=True,
             padx=BaseConfig.PADDING_C,
             pady=BaseConfig.PADDING_B,
-        )
-        self.status_frame.pack(
-            side=tk.BOTTOM,
-            fill=tk.X,
-            padx=BaseConfig.PADDING_C,
-            pady=(0, BaseConfig.PADDING_B)
         )
         # 导航栏布局
         self.nav_bar.pack(
@@ -321,39 +340,65 @@ class APP(tk.Tk):
         )
         # 状态栏布局
         self.status_bar.pack(
-            side=tk.BOTTOM,
-            fill=tk.X,
-        )
-        # 右侧主容器
-        self.right_frame.pack(
-            side=tk.RIGHT,
-            fill=tk.Y,
-            padx=(0, BaseConfig.PADDING_C),
-            pady=BaseConfig.PADDING_A,
-        )
-        self.right_frame.pack_propagate(0)
-        # 右侧上下容器
-        self.upper_frame.pack(
-            side=tk.TOP,
-            fill=tk.BOTH,
-            expand=True,
-            pady=(0, BaseConfig.PADDING_A)
-        )
-        self.upper_frame.pack_propagate(0)
-        self.lower_frame.pack(
-            side=tk.BOTTOM,
-            fill=tk.BOTH,
-            expand=True,
-        )
-        self.lower_frame.pack_propagate(0)
-        # 左侧主容器
-        self.left_frame.pack(
             side=tk.LEFT,
             fill=tk.BOTH,
             expand=True,
-            padx=(BaseConfig.PADDING_B, 0),
-            pady=BaseConfig.PADDING_A,
         )
+        self.main_paned.pack(fill=tk.BOTH, expand=True, pady=BaseConfig.PADDING_A)
+        self.main_paned.add(self.left_frame, minsize=420, stretch="always")
+        self.main_paned.add(self.right_frame, minsize=240, stretch="always")
+
+        self.right_paned.pack(fill=tk.BOTH, expand=True)
+        self.right_paned.add(self.upper_frame, minsize=120, stretch="always")
+        self.right_paned.add(self.lower_frame, minsize=120, stretch="always")
+
+        self.mid_frame.bind("<Configure>", self._on_mid_frame_resize)
+        self.right_frame.bind("<Configure>", self._on_right_frame_resize)
+        self.main_paned.bind("<ButtonRelease-1>", self._on_main_paned_release)
+        self.right_paned.bind("<ButtonRelease-1>", self._on_right_paned_release)
+
+        # 首次渲染后立即应用比例，避免初始等分导致右侧过宽
+        self.after_idle(self._apply_mid_ratio)
+        self.after_idle(self._apply_right_ratio)
+        # 二次校准，兼容不同设备上的延迟几何计算
+        self.after(100, self._apply_mid_ratio)
+        self.after(100, self._apply_right_ratio)
+
+    def _on_mid_frame_resize(self, _event=None):
+        self.after_idle(self._apply_mid_ratio)
+
+    def _on_right_frame_resize(self, _event=None):
+        self.after_idle(self._apply_right_ratio)
+
+    def _on_main_paned_release(self, _event=None):
+        self.after_idle(self._apply_mid_ratio)
+
+    def _on_right_paned_release(self, _event=None):
+        self.after_idle(self._apply_right_ratio)
+
+    def _apply_mid_ratio(self):
+        try:
+            total_width = self.main_paned.winfo_width()
+            left_ratio, right_ratio = self._mid_ratio
+            total_ratio = left_ratio + right_ratio
+            if total_width <= 1 or total_ratio <= 0:
+                return
+            sash_x = int(total_width * left_ratio / total_ratio)
+            self.main_paned.sash_place(0, sash_x, 0)
+        except (tk.TclError, AttributeError):
+            return
+
+    def _apply_right_ratio(self):
+        try:
+            total_height = self.right_paned.winfo_height()
+            upper_ratio, lower_ratio = self._right_ratio
+            total_ratio = upper_ratio + lower_ratio
+            if total_height <= 1 or total_ratio <= 0:
+                return
+            sash_y = int(total_height * upper_ratio / total_ratio)
+            self.right_paned.sash_place(0, 0, sash_y)
+        except (tk.TclError, AttributeError):
+            return
 
     def _init_event_handlers(self):
         self.event_mgr.subscribe(
