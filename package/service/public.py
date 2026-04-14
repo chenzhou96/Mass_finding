@@ -158,16 +158,37 @@ class JSONExporter_formulaSearch_PubChem:
                     "molecular_formula": molecular_formula,
                     "cid": self._get_value(compound, 'cid', ['CID']),
                     "iupac_name": self._get_value(compound, 'iupac_name', ['IUPACName']),
+                    "title": self._get_value(compound, 'title', ['Title']),
                     "isomeric_smiles": self._get_value(compound, 'isomeric_smiles', ['IsomericSMILES']),
                     "canonical_smiles": self._get_value(compound, 'canonical_smiles', ['CanonicalSMILES']),
                     "inchi": self._get_value(compound, 'inchi', ['InChI']),
                     "inchikey": self._get_value(compound, 'inchikey', ['InChIKey']),
                     "molecular_weight": self._get_value(compound, 'molecular_weight', ['MolecularWeight']),
                     "monoisotopic_mass": self._get_value(compound, 'monoisotopic_mass', ['MonoisotopicMass']),
+                    "exact_mass": self._get_value(compound, 'exact_mass', ['ExactMass']),
+                    "xlogp": self._get_value(compound, 'xlogp', ['XLogP']),
+                    "tpsa": self._get_value(compound, 'tpsa', ['TPSA']),
+                    "hbond_donor_count": self._get_value(compound, 'hbond_donor_count', ['HBondDonorCount']),
+                    "hbond_acceptor_count": self._get_value(compound, 'hbond_acceptor_count', ['HBondAcceptorCount']),
+                    "rotatable_bond_count": self._get_value(compound, 'rotatable_bond_count', ['RotatableBondCount']),
+                    "heavy_atom_count": self._get_value(compound, 'heavy_atom_count', ['HeavyAtomCount']),
+                    "charge": self._get_value(compound, 'charge', ['Charge']),
                     "synonyms": self._get_value(compound, 'synonyms', ['synonyms'], []),
+                    "rank": self._get_value(compound, 'rank', ['rank']),
+                    "final_score": self._get_value(compound, 'final_score', ['final_score']),
+                    "score_breakdown": self._get_value(compound, 'score_breakdown', ['score_breakdown'], {}),
+                    "why_selected": self._get_value(compound, 'why_selected', ['why_selected'], []),
+                    "data_quality": self._get_value(compound, 'data_quality', ['data_quality'], {}),
                 }
                 results_list.append(data)
                 count += 1
+
+            top_final_score = None
+            if results_list:
+                top_final_score = max(
+                    (item.get('final_score') for item in results_list if isinstance(item.get('final_score'), (int, float))),
+                    default=None
+                )
 
             # 构建完整数据结构
             data_to_save = {
@@ -177,7 +198,8 @@ class JSONExporter_formulaSearch_PubChem:
                     "molecular_formula": molecular_formula,
                     "result_count": count,
                     "monoisotopic_mass": monoisotopic_mass,
-                    "molecular_weight": molecular_weight
+                    "molecular_weight": molecular_weight,
+                    "top_final_score": top_final_score,
                 },
                 "results": results_list
             }

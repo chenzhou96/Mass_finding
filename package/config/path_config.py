@@ -70,6 +70,7 @@ class PathManager:
 
         self.desktop_path = _get_desktop_path()
         self.existing_formula_filename = "existing_formula.json"
+        self.raw_data_formula_filename = "raw_data_formula.json"
         self.failed_formula_filename = "failed_formula.json"
 
     def get_mass_finding_cache_path(self) -> Path:

@@ -13,12 +13,14 @@ from ..utils.widget_factory import WidgetFactory
 import platform
 from PIL import Image, ImageTk
 from ..config.path_config import PathManager
+from ..service.cache_index_service import sync_formula_index_cache
 
 class APP(tk.Tk):
     def __init__(self):
         self._mid_ratio = (3, 1)
         self._right_ratio = (1, 1)
         self.path_manager = PathManager()
+        self._sync_formula_indexes_on_startup()
         self._init_window()
         self._init_components()
         self._setup_layout()
@@ -31,6 +33,12 @@ class APP(tk.Tk):
             EventType.STATUS_UPDATE, 
             data={"status_text": "done"}
         )
+
+    def _sync_formula_indexes_on_startup(self):
+        try:
+            sync_formula_index_cache(self.path_manager)
+        except Exception as ex:
+            logging.warning(f"启动阶段同步 formula 索引失败: {ex}")
 
     def _init_window(self):
         super().__init__()

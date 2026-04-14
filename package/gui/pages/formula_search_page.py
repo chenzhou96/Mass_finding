@@ -12,6 +12,7 @@ from ...config.base_config import BaseConfig
 from ...config.path_config import PathManager
 from ...core.thread_pool import ThreadPool
 from ...service.formulaSearch import start_search
+from ...service.cache_index_service import sync_formula_index_cache
 
 
 class FormulaSearchPage(BasePage):
@@ -70,9 +71,11 @@ class FormulaSearchPage(BasePage):
 
         self.initialization_cache_path = self.path_manager.get_initialization_cache_path()
         self.existing_formula_file_path = self.path_manager.create_cache_file(self.initialization_cache_path, self.path_manager.existing_formula_filename)
+        self.raw_data_formula_file_path = self.path_manager.create_cache_file(self.initialization_cache_path, self.path_manager.raw_data_formula_filename)
         self.failed_formula_file_path = self.path_manager.create_cache_file(self.initialization_cache_path, self.path_manager.failed_formula_filename)
 
         self.existing_formula_list = self._read_formula_list(self.existing_formula_file_path)
+        self.raw_data_formula_list = self._read_formula_list(self.raw_data_formula_file_path)
         self.failed_formula_list = self._read_formula_list(self.failed_formula_file_path)
         self.waiting_formula_list = []
         self.success_formula_list = []
@@ -147,6 +150,7 @@ class FormulaSearchPage(BasePage):
         btn_frame = self.widget_factory.create_frame(self.left_frame)
         btn_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=BaseConfig.PADDING_A)
         btn_frame.grid_columnconfigure(0, weight=1)
+        btn_frame.grid_columnconfigure(1, weight=1)
 
         self.search_button = self.widget_factory.create_rounded_button(
             btn_frame,
@@ -156,7 +160,17 @@ class FormulaSearchPage(BasePage):
             height="34",
             hover_bg=BaseConfig.ACCENT_COLOR,
         )
-        self.search_button.grid(row=0, column=0, sticky="ew")
+        self.search_button.grid(row=0, column=0, sticky="ew", padx=(0, BaseConfig.PADDING_B))
+
+        self.rebuild_raw_button = self.widget_factory.create_rounded_button(
+            btn_frame,
+            text="仅重建已有 raw 数据",
+            command=self._rebuild_from_raw_only,
+            width="180",
+            height="34",
+            hover_bg=BaseConfig.ACCENT_COLOR,
+        )
+        self.rebuild_raw_button.grid(row=0, column=1, sticky="ew", padx=(BaseConfig.PADDING_B, 0))
 
     def _setup_right_frame(self, labelname='分子式信息'):
         self.info_label = self.widget_factory.create_label(self.right_frame, text=labelname, **AppUIConfig.FunctionZone.FormulaSearchPage.right_label)
@@ -285,43 +299,11 @@ class FormulaSearchPage(BasePage):
 
     def _load_cached_formulas(self):
         try:
-            cache_path = self.path_manager.get_formula_search_cache_path()
-            if not cache_path.exists():
-                return
-
-            for file_path in cache_path.glob('*.json'):
-                try:
-                    with open(file_path, 'r', encoding='utf-8') as f:
-                        data = json.load(f)
-                        if isinstance(data, dict):
-                            metadata = data.get('metadata', {})
-                            formula_str = metadata.get('molecular_formula')
-                            if formula_str and formula_str not in self.existing_formula_list:
-                                self.existing_formula_list.append(formula_str)
-                            results = data.get('results', [])
-                        else:
-                            results = data
-
-                        if not isinstance(results, list):
-                            continue
-
-                        for item in results:
-                            if not isinstance(item, dict):
-                                continue
-
-                            formula_dict = item.get('formula')
-                            if isinstance(formula_dict, dict):
-                                formula_str = self._formula_dict_to_string(formula_dict)
-                                if formula_str and formula_str not in self.existing_formula_list:
-                                    self.existing_formula_list.append(formula_str)
-                            elif item.get('molecular_formula'):
-                                formula_str = item.get('molecular_formula')
-                                if formula_str and formula_str not in self.existing_formula_list:
-                                    self.existing_formula_list.append(formula_str)
-                except Exception:
-                    continue
-
+            indexes = sync_formula_index_cache(self.path_manager)
+            self.existing_formula_list = indexes.get('existing_formulas', [])
+            self.raw_data_formula_list = indexes.get('raw_data_formulas', [])
             self._write_formula_list(self.existing_formula_file_path, self.existing_formula_list)
+            self._write_formula_list(self.raw_data_formula_file_path, self.raw_data_formula_list)
         except Exception as e:
             logging.warning(f"加载缓存化学式失败: {e}")
 
@@ -528,7 +510,7 @@ class FormulaSearchPage(BasePage):
         }
         return mapping.get(area_name)
 
-    def _run_search(self, target_formulas=None):
+    def _run_search(self, target_formulas=None, raw_only=False):
         self.event_mgr.publish(
             EventType.STATUS_UPDATE, 
             data={"status_text": "running..."}
@@ -542,13 +524,29 @@ class FormulaSearchPage(BasePage):
         
         params = {
             "formula_list": formula_list,
-            "web_name": "PubChem"
+            "web_name": "PubChem",
+            "ion_mode": "both",
+            "raw_only": raw_only,
         }
 
         self.thread_pool.submit(self._run_search_background, params)
 
     def _cache_file_for_formula(self, formula):
         return self.path_manager.get_formula_search_cache_path() / f"formula_search_results_{formula}.json"
+
+    def _has_pubchem_raw_cache(self, formula):
+        return formula in self.raw_data_formula_list
+
+    def _rebuild_from_raw_only(self):
+        candidates = list(self.raw_data_formula_list)
+
+        if not candidates:
+            logging.warning("未找到可重建的 PubChem 原始缓存分子式")
+            self.event_mgr.publish(EventType.STATUS_UPDATE, data={"status_text": "done"})
+            return
+
+        logging.info(f"开始仅基于 raw 数据重建，目标分子式数量: {len(candidates)}")
+        self._run_search(target_formulas=candidates, raw_only=True)
 
     def _load_cached_result_for_formula(self, formula):
         cache_file = self._cache_file_for_formula(formula)
@@ -570,20 +568,34 @@ class FormulaSearchPage(BasePage):
     def _run_search_background(self, params):
         try:
             formula_list = list(params["formula_list"])
+            raw_only = bool(params.get("raw_only", False))
             local_hit_results = {}
             need_search_formulas = []
 
-            for formula in formula_list:
-                cached_data = self._load_cached_result_for_formula(formula)
-                if cached_data is not None:
-                    local_hit_results[formula] = cached_data
-                    logging.info(f"分子式 {formula} 已有本地缓存，跳过网络检索并直接使用本地数据")
-                else:
-                    need_search_formulas.append(formula)
+            if raw_only:
+                need_search_formulas = formula_list
+            else:
+                for formula in formula_list:
+                    if self._has_pubchem_raw_cache(formula):
+                        need_search_formulas.append(formula)
+                        logging.info(f"分子式 {formula} 命中 PubChem 原始缓存，将执行重处理")
+                        continue
+
+                    cached_data = self._load_cached_result_for_formula(formula)
+                    if cached_data is not None:
+                        local_hit_results[formula] = cached_data
+                        logging.info(f"分子式 {formula} 已有本地缓存，跳过网络检索并直接使用本地数据")
+                    else:
+                        need_search_formulas.append(formula)
 
             search_results = {"success": {}, "failed": []}
             if need_search_formulas:
-                search_results = start_search(need_search_formulas, params["web_name"])
+                search_results = start_search(
+                    need_search_formulas,
+                    params["web_name"],
+                    params.get("ion_mode", "both"),
+                    raw_only=raw_only,
+                )
 
             merged_success = {}
             merged_success.update(local_hit_results)
@@ -595,6 +607,9 @@ class FormulaSearchPage(BasePage):
                     self.success_formula_list.append(formula)
                 if formula not in self.existing_formula_list:
                     self.existing_formula_list.append(formula)
+                has_raw = any(self.path_manager.get_pubchem_raw_cache_path().glob(f"pubchem_raw_{formula}_*.json"))
+                if formula not in self.raw_data_formula_list and has_raw:
+                    self.raw_data_formula_list.append(formula)
 
             for formula in failed_formulas:
                 if formula not in self.failed_formula_list:
@@ -603,6 +618,7 @@ class FormulaSearchPage(BasePage):
             self._remove_from_waiting_list(formula_list)
 
             self._write_formula_list(self.existing_formula_file_path, self.existing_formula_list)
+            self._write_formula_list(self.raw_data_formula_file_path, self.raw_data_formula_list)
             self._write_formula_list(self.failed_formula_file_path, self.failed_formula_list)
 
             self.after(0, self._update_formula_display, self.waiting_formula_frame, self.waiting_formula_list)
@@ -699,16 +715,47 @@ class FormulaSearchPage(BasePage):
         mono = item.get("monoisotopic_mass") or "N/A"
         inchi = item.get("inchi") or "N/A"
         inchikey = item.get("inchikey") or "N/A"
+        final_score = item.get("final_score")
+        rank = item.get("rank")
+        score_breakdown = item.get("score_breakdown") or {}
+        why_selected = item.get("why_selected") or []
+        xlogp = item.get("xlogp")
+        tpsa = item.get("tpsa")
+        hbd = item.get("hbond_donor_count")
+        hba = item.get("hbond_acceptor_count")
+        charge = item.get("charge")
+
+        score_text = "N/A" if final_score is None else f"{final_score}"
+        rank_text = "N/A" if rank is None else f"{rank}"
+        ion_score = score_breakdown.get("ionization_likelihood")
+        quality_score = score_breakdown.get("record_quality")
+        prevalence_score = score_breakdown.get("prevalence")
+
+        def _fmt_metric(value):
+            return "N/A" if value is None else str(value)
 
         lines = [
             f"CID: {cid}",
             f"IUPAC Name: {iupac_name}",
             f"Molecular Weight: {mw}",
             f"Monoisotopic Mass: {mono}",
+            f"Rank: {rank_text}",
+            f"Final Score: {score_text}",
             f"SMILES: {smiles if smiles else 'N/A'}",
             f"InChI: {inchi}",
             f"InChIKey: {inchikey}",
+            f"XLogP: {_fmt_metric(xlogp)}",
+            f"TPSA: {_fmt_metric(tpsa)}",
+            f"H-Bond Donor Count: {_fmt_metric(hbd)}",
+            f"H-Bond Acceptor Count: {_fmt_metric(hba)}",
+            f"Charge: {_fmt_metric(charge)}",
+            f"Score Breakdown (ionization/quality/prevalence): {_fmt_metric(ion_score)}/{_fmt_metric(quality_score)}/{_fmt_metric(prevalence_score)}",
         ]
+
+        if why_selected:
+            lines.append("Why Selected:")
+            for reason in why_selected:
+                lines.append(f"- {reason}")
 
         self.result_text.config(state=tk.NORMAL)
         self.result_text.delete('1.0', tk.END)
@@ -740,7 +787,11 @@ class FormulaSearchPage(BasePage):
         for idx, item in enumerate(self.current_formula_results, start=1):
             cid = item.get("cid") or "N/A"
             name = item.get("iupac_name") or "N/A"
-            self.compound_listbox.insert(tk.END, f"{idx}. CID={cid} | {name}")
+            score = item.get("final_score")
+            if isinstance(score, (int, float)):
+                self.compound_listbox.insert(tk.END, f"{idx}. Score={score:.2f} | CID={cid} | {name}")
+            else:
+                self.compound_listbox.insert(tk.END, f"{idx}. CID={cid} | {name}")
 
         if self.current_formula_results:
             self.compound_listbox.selection_set(0)
