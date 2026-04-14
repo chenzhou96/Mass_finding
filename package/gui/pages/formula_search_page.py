@@ -80,6 +80,8 @@ class FormulaSearchPage(BasePage):
         self.waiting_formula_list = []
         self.success_formula_list = []
         self.text_areas = {}
+        self.strict_filter_var = tk.BooleanVar(value=True)
+        self.current_display_formula = None
 
     def _ensure_rdkit_available(self):
         if self._rdkit_checked:
@@ -171,6 +173,21 @@ class FormulaSearchPage(BasePage):
             hover_bg=BaseConfig.ACCENT_COLOR,
         )
         self.rebuild_raw_button.grid(row=0, column=1, sticky="ew", padx=(BaseConfig.PADDING_B, 0))
+
+        self.strict_filter_checkbutton = self.widget_factory.create_checkbutton(
+            btn_frame,
+            text="严格过滤（多组分/IUPAC含;/同位素）",
+            variable=self.strict_filter_var,
+            command=self._on_toggle_strict_filter,
+            anchor='w',
+        )
+        self.strict_filter_checkbutton.grid(
+            row=1,
+            column=0,
+            columnspan=2,
+            sticky="w",
+            pady=(BaseConfig.PADDING_B, 0),
+        )
 
     def _setup_right_frame(self, labelname='分子式信息'):
         self.info_label = self.widget_factory.create_label(self.right_frame, text=labelname, **AppUIConfig.FunctionZone.FormulaSearchPage.right_label)
@@ -527,6 +544,7 @@ class FormulaSearchPage(BasePage):
             "web_name": "PubChem",
             "ion_mode": "both",
             "raw_only": raw_only,
+            "strict_filter": bool(self.strict_filter_var.get()),
         }
 
         self.thread_pool.submit(self._run_search_background, params)
@@ -595,6 +613,7 @@ class FormulaSearchPage(BasePage):
                     params["web_name"],
                     params.get("ion_mode", "both"),
                     raw_only=raw_only,
+                    strict_filter=bool(params.get("strict_filter", True)),
                 )
 
             merged_success = {}
@@ -780,8 +799,11 @@ class FormulaSearchPage(BasePage):
 
         metadata = data.get("metadata", {})
         results = data.get("results", [])
-        self.current_formula_results = results if isinstance(results, list) else []
-        self.formula_info_label.config(text=f"分子式: {formula} | 记录数: {len(self.current_formula_results)}")
+        raw_results = results if isinstance(results, list) else []
+        self.current_formula_results = self._filter_compound_results_for_display(raw_results)
+        self.formula_info_label.config(
+            text=f"分子式: {formula} | 原始记录数: {len(raw_results)} | 展示记录数: {len(self.current_formula_results)}"
+        )
 
         self.compound_listbox.delete(0, tk.END)
         for idx, item in enumerate(self.current_formula_results, start=1):
@@ -811,3 +833,43 @@ class FormulaSearchPage(BasePage):
 
         first_formula = next(iter(merged_success.keys()))
         self._show_formula_info(first_formula)
+
+    def _is_strict_filtered_item(self, item):
+        covalent_unit = item.get("covalent_unit")
+        try:
+            if covalent_unit is not None and int(covalent_unit) > 1:
+                return True
+        except (TypeError, ValueError):
+            pass
+
+        iupac_name = item.get("iupac_name")
+        if isinstance(iupac_name, str) and ';' in iupac_name:
+            return True
+
+        isotope_atom_count = item.get("isotope_atom_count")
+        try:
+            if isotope_atom_count is not None and int(isotope_atom_count) > 0:
+                return True
+        except (TypeError, ValueError):
+            pass
+
+        if bool(item.get("isotopic_flag")):
+            return True
+
+        inchi = item.get("inchi")
+        if isinstance(inchi, str) and '/i' in inchi.lower():
+            return True
+
+        return False
+
+    def _filter_compound_results_for_display(self, results):
+        if not isinstance(results, list):
+            return []
+        if not bool(self.strict_filter_var.get()):
+            return list(results)
+
+        return [item for item in results if isinstance(item, dict) and not self._is_strict_filtered_item(item)]
+
+    def _on_toggle_strict_filter(self):
+        if self.current_display_formula:
+            self._show_formula_info(self.current_display_formula)

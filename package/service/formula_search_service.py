@@ -58,6 +58,20 @@ SCORE_WEIGHT_BY_MODE: Dict[str, Dict[str, float]] = {
 }
 
 
+COMMERCIAL_KEYWORD_WEIGHTS: Dict[str, float] = {
+    'for mass spectrometry': 0.08,
+    'reference standard': 0.10,
+    'certified reference material': 0.10,
+    'usp': 0.08,
+    'ep': 0.08,
+    'grade': 0.05,
+    'solution': 0.04,
+    'buffer': 0.04,
+}
+
+COMMERCIAL_BOOST_CAP = 0.20
+
+
 def _normalize_formula(formula: str) -> str:
     if not isinstance(formula, str):
         return ''
@@ -201,6 +215,58 @@ def _estimate_prevalence_from_synonyms(synonyms: List[str]) -> float:
     return max(0.0, min(1.0, raw_score + trusted_bonus))
 
 
+def _commercial_availability_boost(synonyms: List[str]) -> float:
+    if not synonyms:
+        return 0.0
+
+    lowered = [name.lower() for name in synonyms if isinstance(name, str)]
+    if not lowered:
+        return 0.0
+
+    boost = 0.0
+    for keyword, weight in COMMERCIAL_KEYWORD_WEIGHTS.items():
+        if any(keyword in name for name in lowered):
+            boost += weight
+
+    return max(0.0, min(COMMERCIAL_BOOST_CAP, boost))
+
+
+def _contains_isotope_marker(inchi: Any) -> bool:
+    return isinstance(inchi, str) and '/i' in inchi.lower()
+
+
+def _extract_record_count_value(src: Dict[str, Any], key: str) -> Optional[int]:
+    record = src.get('record')
+    if not isinstance(record, dict):
+        return None
+    count = record.get('count')
+    if not isinstance(count, dict):
+        return None
+    return _safe_int(count.get(key))
+
+
+def _strict_filter_reasons(compound: Dict[str, Any]) -> List[str]:
+    reasons: List[str] = []
+
+    covalent_unit = _safe_int(compound.get('covalent_unit')) or 0
+    if covalent_unit > 1:
+        reasons.append('多组分结构(covalent_unit>1)')
+
+    iupac_name = compound.get('iupac_name')
+    if isinstance(iupac_name, str) and ';' in iupac_name:
+        reasons.append('IUPAC 名称包含分号')
+
+    isotope_atom_count = _safe_int(compound.get('isotope_atom_count')) or 0
+    if isotope_atom_count > 0 or bool(compound.get('isotopic_flag')):
+        reasons.append('同位素标记化合物')
+
+    return reasons
+
+
+def _is_strict_filtered_compound(compound: Dict[str, Any]) -> bool:
+    return bool(_strict_filter_reasons(compound))
+
+
 def _ionization_likelihood_score(compound: Dict[str, Any], ion_mode: str) -> float:
     xlogp = _safe_float(compound.get('xlogp'))
     tpsa = _safe_float(compound.get('tpsa'))
@@ -281,6 +347,7 @@ def _build_why_selected(
     ion_score: float,
     quality_score: float,
     prevalence_score: float,
+    commercial_boost: float = 0.0,
 ) -> List[str]:
     reasons: List[str] = []
     if ion_score >= 0.7:
@@ -289,6 +356,8 @@ def _build_why_selected(
         reasons.append('结构信息较完整')
     if prevalence_score >= 0.6:
         reasons.append('同义词较丰富，公共记录较多')
+    if commercial_boost >= 0.08:
+        reasons.append('命中可购试剂关键词，商业可获得性较高')
     if compound.get('exact_mass') is not None:
         reasons.append('包含精确质量字段，可用于后续精细比对')
     if not reasons:
@@ -302,12 +371,22 @@ def _normalize_pubchem_compound(compound: Any) -> Dict[str, Any]:
     else:
         src = _compound_to_serializable(compound)
 
+    isotope_atom_count = _safe_int(src.get('isotope_atom_count', src.get('isotope_atom')))
+    if isotope_atom_count is None:
+        isotope_atom_count = _extract_record_count_value(src, 'isotope_atom')
+
+    covalent_unit = _safe_int(src.get('covalent_unit', src.get('covalent_unit_count')))
+    if covalent_unit is None:
+        covalent_unit = _extract_record_count_value(src, 'covalent_unit')
+
+    inchi_value = src.get('inchi', src.get('InChI'))
+
     normalized = {
         'cid': _safe_int(src.get('cid', src.get('CID'))),
         'iupac_name': src.get('iupac_name', src.get('IUPACName')),
         'isomeric_smiles': src.get('isomeric_smiles', src.get('IsomericSMILES')),
         'canonical_smiles': src.get('canonical_smiles', src.get('CanonicalSMILES')),
-        'inchi': src.get('inchi', src.get('InChI')),
+        'inchi': inchi_value,
         'inchikey': src.get('inchikey', src.get('InChIKey')),
         'molecular_weight': _safe_float(src.get('molecular_weight', src.get('MolecularWeight'))),
         'monoisotopic_mass': _safe_float(src.get('monoisotopic_mass', src.get('MonoisotopicMass'))),
@@ -321,7 +400,11 @@ def _normalize_pubchem_compound(compound: Any) -> Dict[str, Any]:
         'charge': _safe_int(src.get('charge', src.get('Charge'))),
         'title': src.get('title', src.get('Title')),
         'synonyms': _normalize_synonyms(src.get('synonyms', [])),
+        'isotope_atom_count': isotope_atom_count,
+        'covalent_unit': covalent_unit,
     }
+
+    normalized['isotopic_flag'] = bool((isotope_atom_count or 0) > 0 or _contains_isotope_marker(inchi_value))
 
     normalized['data_quality'] = {
         'has_structure_identifier': bool(normalized['canonical_smiles'] or normalized['inchi']),
@@ -335,18 +418,31 @@ def _normalize_pubchem_compound(compound: Any) -> Dict[str, Any]:
 
     return normalized
 
-
-def _rank_compounds(compounds: List[Any], ion_mode: str = 'both') -> List[Dict[str, Any]]:
+def _rank_compounds(compounds: List[Any], ion_mode: str = 'both', strict_filter: bool = True) -> List[Dict[str, Any]]:
     mode = ion_mode.lower().strip()
     if mode not in SCORE_WEIGHT_BY_MODE:
         mode = 'both'
     weights = SCORE_WEIGHT_BY_MODE[mode]
 
     normalized_compounds = [_normalize_pubchem_compound(compound) for compound in compounds]
+    if strict_filter:
+        filtered_count = 0
+        kept_compounds: List[Dict[str, Any]] = []
+        for compound in normalized_compounds:
+            if _is_strict_filtered_compound(compound):
+                filtered_count += 1
+                continue
+            kept_compounds.append(compound)
+        if filtered_count > 0:
+            logging.info(f"严格过滤命中 {filtered_count} 条记录")
+        normalized_compounds = kept_compounds
+
     for compound in normalized_compounds:
         ion_score = _ionization_likelihood_score(compound, mode)
         quality_score = _record_quality_score(compound)
-        prevalence_score = _estimate_prevalence_from_synonyms(compound.get('synonyms', []))
+        base_prevalence_score = _estimate_prevalence_from_synonyms(compound.get('synonyms', []))
+        commercial_boost = _commercial_availability_boost(compound.get('synonyms', []))
+        prevalence_score = max(0.0, min(1.0, base_prevalence_score + commercial_boost))
 
         final_score = (
             ion_score * weights['ionization_likelihood'] +
@@ -358,9 +454,10 @@ def _rank_compounds(compounds: List[Any], ion_mode: str = 'both') -> List[Dict[s
             'ionization_likelihood': round(ion_score, 4),
             'record_quality': round(quality_score, 4),
             'prevalence': round(prevalence_score, 4),
+            'commercial_availability': round(commercial_boost, 4),
         }
         compound['final_score'] = round(final_score * 100.0, 2)
-        compound['why_selected'] = _build_why_selected(compound, ion_score, quality_score, prevalence_score)
+        compound['why_selected'] = _build_why_selected(compound, ion_score, quality_score, prevalence_score, commercial_boost)
 
     # InChIKey first block去重，保留同组中得分更高的记录
     dedup: Dict[str, Dict[str, Any]] = {}
@@ -569,11 +666,12 @@ class FormulaSearchPubChem(FormulaSearch):
 
 
 class SearchManager:
-    def __init__(self, searcher: FormulaSearch, exporter_name: str, ion_mode: str = 'both', raw_only: bool = False):
+    def __init__(self, searcher: FormulaSearch, exporter_name: str, ion_mode: str = 'both', raw_only: bool = False, strict_filter: bool = True):
         self.searcher = searcher
         self.exporter_name = exporter_name
         self.ion_mode = ion_mode
         self.raw_only = raw_only
+        self.strict_filter = strict_filter
 
     def search_formula_list(self, formula_list: List[str]) -> Dict[str, Any]:
         if not formula_list:
@@ -590,7 +688,7 @@ class SearchManager:
                 if self.exporter_name == 'json_formulaSearch_PubChem':
                     raw_cached_compounds = _load_latest_pubchem_raw_results(formula)
                     if raw_cached_compounds:
-                        ranked_compounds = _rank_compounds(raw_cached_compounds, ion_mode=self.ion_mode)
+                        ranked_compounds = _rank_compounds(raw_cached_compounds, ion_mode=self.ion_mode, strict_filter=self.strict_filter)
                         export_data = exporter.export((formula, ranked_compounds))
                         results["success"][formula] = export_data
                         logging.info(f"分子式 {formula} 使用 PubChem 原始缓存重处理完成")
@@ -603,7 +701,7 @@ class SearchManager:
                 compounds = self.searcher.get_compounds(formula)
                 if compounds:
                     _save_pubchem_raw_data(formula, compounds)
-                    ranked_compounds = _rank_compounds(compounds, ion_mode=self.ion_mode)
+                    ranked_compounds = _rank_compounds(compounds, ion_mode=self.ion_mode, strict_filter=self.strict_filter)
                     export_data = exporter.export((formula, ranked_compounds))
                     results["success"][formula] = export_data
                 else:
@@ -620,6 +718,7 @@ def start_search(
     web_name: str,
     ion_mode: str = 'both',
     raw_only: bool = False,
+    strict_filter: bool = True,
 ) -> Dict[str, Any]:
     web_name_lower = web_name.lower()
     if 'pubchem' in web_name_lower:
@@ -628,5 +727,5 @@ def start_search(
     else:
         raise ValueError(f"未知的 web_name: {web_name}")
 
-    manager = SearchManager(searcher, exporter_name, ion_mode=ion_mode, raw_only=raw_only)
+    manager = SearchManager(searcher, exporter_name, ion_mode=ion_mode, raw_only=raw_only, strict_filter=strict_filter)
     return manager.search_formula_list(formula_list)
