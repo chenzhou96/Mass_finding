@@ -11,7 +11,7 @@ from ...config.event_config import EventType, EventPriority
 from ...config.base_config import BaseConfig
 from ...config.path_config import PathManager
 from ...core.thread_pool import ThreadPool
-from ...service.formulaSearch import start_search
+from ...service.formulaSearch import start_search, rerank_cached_compounds
 from ...service.cache_index_service import sync_formula_index_cache
 
 
@@ -601,7 +601,12 @@ class FormulaSearchPage(BasePage):
             return None
         try:
             with open(cache_file, 'r', encoding='utf-8') as f:
-                return json.load(f)
+                payload = json.load(f)
+
+            if isinstance(payload, dict):
+                raw_results = payload.get('results', [])
+                payload['results'] = rerank_cached_compounds(raw_results, ion_mode='both', strict_filter=True)
+            return payload
         except Exception as ex:
             logging.warning(f"读取本地缓存失败({formula}): {ex}")
             return None
@@ -818,16 +823,17 @@ class FormulaSearchPage(BasePage):
 
         item = self.current_formula_results[idx]
         cid = item.get("cid") or "N/A"
+        title = item.get("title") or "N/A"
         iupac_name = item.get("iupac_name") or "N/A"
         smiles = item.get("canonical_smiles") or item.get("isomeric_smiles") or ""
         mw = item.get("molecular_weight") or "N/A"
         mono = item.get("monoisotopic_mass") or "N/A"
         inchi = item.get("inchi") or "N/A"
-        inchikey = item.get("inchikey") or "N/A"
         final_score = item.get("final_score")
         rank = item.get("rank")
         score_breakdown = item.get("score_breakdown") or {}
         why_selected = item.get("why_selected") or []
+        synonyms = item.get("synonyms") or []
         xlogp = item.get("xlogp")
         tpsa = item.get("tpsa")
         hbd = item.get("hbond_donor_count")
@@ -839,11 +845,16 @@ class FormulaSearchPage(BasePage):
         ion_score = score_breakdown.get("ionization_likelihood")
         quality_score = score_breakdown.get("record_quality")
         prevalence_score = score_breakdown.get("prevalence")
+        synonym_count = len(synonyms) if isinstance(synonyms, list) else 0
 
         def _fmt_metric(value):
             return "N/A" if value is None else str(value)
 
-        lines = ["Why Selected:"]
+        lines = [
+            f"Rank: {rank_text}",
+            f"Final Score: {score_text}",
+            "Why Selected:",
+        ]
         if why_selected:
             for reason in why_selected:
                 lines.append(f"- {reason}")
@@ -851,17 +862,19 @@ class FormulaSearchPage(BasePage):
             lines.append("- N/A")
 
         lines.extend([
+            "",
             f"CID: {cid}",
+            f"Title: {title}",
             f"IUPAC Name: {iupac_name}",
+            f"Synonym Count: {synonym_count}",
             f"Monoisotopic Mass: {mono}",
-            f"Rank: {rank_text}",
-            f"Final Score: {score_text}",
+            f"Molecular Weight: {mw}",
             f"XLogP: {_fmt_metric(xlogp)}",
             f"TPSA: {_fmt_metric(tpsa)}",
             f"H-Bond Donor Count: {_fmt_metric(hbd)}",
             f"H-Bond Acceptor Count: {_fmt_metric(hba)}",
             f"Charge: {_fmt_metric(charge)}",
-            f"Score Breakdown (ionization/quality/prevalence): {_fmt_metric(ion_score)}/{_fmt_metric(quality_score)}/{_fmt_metric(prevalence_score)}",
+            f"Score Breakdown (public records/quality/ionization): {_fmt_metric(prevalence_score)}/{_fmt_metric(quality_score)}/{_fmt_metric(ion_score)}",
         ])
 
         self.result_text.config(state=tk.NORMAL)
@@ -896,12 +909,14 @@ class FormulaSearchPage(BasePage):
         self.compound_listbox.delete(0, tk.END)
         for idx, item in enumerate(self.current_formula_results, start=1):
             cid = item.get("cid") or "N/A"
-            name = item.get("iupac_name") or "N/A"
+            name = item.get("title") or item.get("iupac_name") or "N/A"
+            synonyms = item.get("synonyms") or []
+            ref_count = len(synonyms) if isinstance(synonyms, list) else 0
             score = item.get("final_score")
             if isinstance(score, (int, float)):
-                self.compound_listbox.insert(tk.END, f"{idx}. Score={score:.2f} | CID={cid} | {name}")
+                self.compound_listbox.insert(tk.END, f"{idx}. Score={score:.2f} | refs={ref_count} | CID={cid} | {name}")
             else:
-                self.compound_listbox.insert(tk.END, f"{idx}. CID={cid} | {name}")
+                self.compound_listbox.insert(tk.END, f"{idx}. refs={ref_count} | CID={cid} | {name}")
 
         if self.current_formula_results:
             self.compound_listbox.selection_set(0)

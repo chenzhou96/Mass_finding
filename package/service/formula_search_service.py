@@ -54,19 +54,19 @@ class FormulaSearch:
 
 SCORE_WEIGHT_BY_MODE: Dict[str, Dict[str, float]] = {
     'positive': {
-        'ionization_likelihood': 0.55,
-        'record_quality': 0.30,
-        'prevalence': 0.15,
+        'ionization_likelihood': 0.10,
+        'record_quality': 0.20,
+        'prevalence': 0.70,
     },
     'negative': {
-        'ionization_likelihood': 0.55,
-        'record_quality': 0.30,
-        'prevalence': 0.15,
+        'ionization_likelihood': 0.10,
+        'record_quality': 0.20,
+        'prevalence': 0.70,
     },
     'both': {
-        'ionization_likelihood': 0.55,
-        'record_quality': 0.30,
-        'prevalence': 0.15,
+        'ionization_likelihood': 0.10,
+        'record_quality': 0.20,
+        'prevalence': 0.70,
     },
 }
 
@@ -83,6 +83,14 @@ COMMERCIAL_KEYWORD_WEIGHTS: Dict[str, float] = {
 }
 
 COMMERCIAL_BOOST_CAP = 0.20
+
+PUBLIC_RECORD_MARKERS = (
+    'CAS', 'UNII', 'CHEBI', 'CHEMBL', 'PUBCHEM', 'HMDB', 'KEGG', 'DRUGBANK', 'LIPIDMAPS', 'METLIN'
+)
+
+BIOLOGICAL_RECORD_MARKERS = (
+    'HMDB', 'KEGG', 'LIPIDMAPS', 'DRUGBANK', 'METLIN', 'BIOCYC'
+)
 
 
 def _normalize_formula(formula: str) -> str:
@@ -216,16 +224,37 @@ def _estimate_prevalence_from_synonyms(synonyms: List[str]) -> float:
     if not synonyms:
         return 0.0
 
-    trusted_markers = ('CAS', 'UNII', 'CHEBI', 'CHEMBL', 'PUBCHEM')
     trusted_count = 0
     for name in synonyms:
         upper_name = name.upper()
-        if any(marker in upper_name for marker in trusted_markers):
+        if any(marker in upper_name for marker in PUBLIC_RECORD_MARKERS):
             trusted_count += 1
 
-    raw_score = min(len(synonyms), 120) / 120.0
-    trusted_bonus = min(trusted_count, 20) / 200.0
+    raw_score = min(len(synonyms), 60) / 60.0
+    trusted_bonus = min(trusted_count, 12) / 48.0
     return max(0.0, min(1.0, raw_score + trusted_bonus))
+
+
+def _collect_reference_markers(compound: Dict[str, Any]) -> Dict[str, List[str]]:
+    text_pool: List[str] = []
+
+    synonyms = compound.get('synonyms', [])
+    if isinstance(synonyms, list):
+        text_pool.extend(item for item in synonyms if isinstance(item, str) and item.strip())
+
+    for key in ('title', 'iupac_name'):
+        value = compound.get(key)
+        if isinstance(value, str) and value.strip():
+            text_pool.append(value.strip())
+
+    combined = ' | '.join(text_pool).upper()
+    public_markers = [marker for marker in PUBLIC_RECORD_MARKERS if marker in combined]
+    bio_markers = [marker for marker in BIOLOGICAL_RECORD_MARKERS if marker in combined]
+
+    return {
+        'public_markers': list(dict.fromkeys(public_markers)),
+        'bio_markers': list(dict.fromkeys(bio_markers)),
+    }
 
 
 def _commercial_availability_boost(synonyms: List[str]) -> float:
@@ -363,19 +392,38 @@ def _build_why_selected(
     commercial_boost: float = 0.0,
 ) -> List[str]:
     reasons: List[str] = []
-    if ion_score >= 0.7:
-        reasons.append('离子化倾向较高')
-    if quality_score >= 0.75:
-        reasons.append('结构信息较完整')
-    if prevalence_score >= 0.6:
-        reasons.append('同义词较丰富，公共记录较多')
+    synonyms = compound.get('synonyms', []) if isinstance(compound.get('synonyms', []), list) else []
+    synonym_count = len(synonyms)
+    marker_info = _collect_reference_markers(compound)
+    public_markers = marker_info.get('public_markers', [])
+    bio_markers = marker_info.get('bio_markers', [])
+
+    if synonym_count >= 15 or prevalence_score >= 0.70:
+        if public_markers:
+            reasons.append(f"公共记录丰富（{'/'.join(public_markers[:3])}）")
+        else:
+            reasons.append(f'公共记录丰富（同义词 {synonym_count} 条）')
+    elif synonym_count >= 6:
+        reasons.append(f'有一定公共记录支持（同义词 {synonym_count} 条）')
+
+    if bio_markers:
+        reasons.append(f"命中生物相关词条：{'/'.join(bio_markers[:3])}")
+
     if commercial_boost >= 0.08:
-        reasons.append('命中可购试剂关键词，商业可获得性较高')
-    if compound.get('exact_mass') is not None:
-        reasons.append('包含精确质量字段，可用于后续精细比对')
+        reasons.append('含标准品/试剂关键词')
+
+    if quality_score >= 0.80:
+        reasons.append('结构字段较完整')
+    elif compound.get('inchikey') or compound.get('inchi') or compound.get('canonical_smiles'):
+        reasons.append('具备基础结构标识')
+
+    if ion_score >= 0.80 and len(reasons) < 4:
+        reasons.append('离子化可见性较好')
+
     if not reasons:
-        reasons.append('基础结构信息可用，但证据强度一般')
-    return reasons
+        reasons.append('公共记录较少，但可作候选参考')
+
+    return reasons[:4]
 
 
 def _normalize_pubchem_compound(compound: Any) -> Dict[str, Any]:
@@ -456,6 +504,7 @@ def _rank_compounds(compounds: List[Any], ion_mode: str = 'both', strict_filter:
         base_prevalence_score = _estimate_prevalence_from_synonyms(compound.get('synonyms', []))
         commercial_boost = _commercial_availability_boost(compound.get('synonyms', []))
         prevalence_score = max(0.0, min(1.0, base_prevalence_score + commercial_boost))
+        marker_info = _collect_reference_markers(compound)
 
         final_score = (
             ion_score * weights['ionization_likelihood'] +
@@ -463,6 +512,8 @@ def _rank_compounds(compounds: List[Any], ion_mode: str = 'both', strict_filter:
             prevalence_score * weights['prevalence']
         )
 
+        compound['public_record_count'] = len(compound.get('synonyms', [])) if isinstance(compound.get('synonyms', []), list) else 0
+        compound['reference_markers'] = marker_info
         compound['score_breakdown'] = {
             'ionization_likelihood': round(ion_score, 4),
             'record_quality': round(quality_score, 4),
@@ -472,23 +523,25 @@ def _rank_compounds(compounds: List[Any], ion_mode: str = 'both', strict_filter:
         compound['final_score'] = round(final_score * 100.0, 2)
         compound['why_selected'] = _build_why_selected(compound, ion_score, quality_score, prevalence_score, commercial_boost)
 
-    # InChIKey first block去重，保留同组中得分更高的记录
-    dedup: Dict[str, Dict[str, Any]] = {}
-    fallback_items: List[Dict[str, Any]] = []
+    # 仅移除完全重复的条目；保留立体异构体并行展示
+    seen_keys = set()
+    ranked: List[Dict[str, Any]] = []
     for compound in normalized_compounds:
-        key = compound.get('inchikey')
-        if isinstance(key, str) and '-' in key:
-            block = key.split('-', 1)[0]
-            exists = dedup.get(block)
-            if exists is None or compound['final_score'] > exists['final_score']:
-                dedup[block] = compound
-        else:
-            fallback_items.append(compound)
+        dedup_key = (
+            compound.get('cid') or 0,
+            compound.get('inchikey') or '',
+            compound.get('isomeric_smiles') or compound.get('canonical_smiles') or '',
+            compound.get('iupac_name') or '',
+        )
+        if dedup_key in seen_keys:
+            continue
+        seen_keys.add(dedup_key)
+        ranked.append(compound)
 
-    ranked = list(dedup.values()) + fallback_items
     ranked.sort(
         key=lambda item: (
             item.get('final_score', 0),
+            item.get('score_breakdown', {}).get('prevalence', 0),
             item.get('score_breakdown', {}).get('record_quality', 0),
             item.get('cid') or 0,
         ),
@@ -499,6 +552,12 @@ def _rank_compounds(compounds: List[Any], ion_mode: str = 'both', strict_filter:
         item['rank'] = idx
 
     return ranked
+
+
+def rerank_cached_compounds(compounds: Any, ion_mode: str = 'both', strict_filter: bool = True) -> List[Dict[str, Any]]:
+    if not isinstance(compounds, list):
+        return []
+    return _rank_compounds(compounds, ion_mode=ion_mode, strict_filter=strict_filter)
 
 
 def _fetch_pubchem_json(url: str, timeout: int = 30, endpoint_label: str = 'unknown') -> dict:
@@ -575,13 +634,36 @@ def _poll_pubchem_listkey(
 
 def _build_pubchem_compounds_from_cids(
     cids: List[int],
-    max_records: int = 100,
+    max_records: Optional[int] = None,
     source_compounds: Optional[List[Any]] = None,
     timeout: int = 30,
+    chunk_size: int = 100,
 ) -> List[Dict[str, Any]]:
     if not cids:
         return []
-    cids = cids[:max_records]
+
+    ordered_cids: List[int] = []
+    seen_cids = set()
+    for raw_cid in cids:
+        cid = _safe_int(raw_cid)
+        if cid is None or cid in seen_cids:
+            continue
+        seen_cids.add(cid)
+        ordered_cids.append(cid)
+
+    if max_records is not None:
+        limit = _safe_int(max_records)
+        if limit is not None and limit > 0:
+            ordered_cids = ordered_cids[:limit]
+
+    if not ordered_cids:
+        return []
+
+    try:
+        batch_size = max(1, int(chunk_size))
+    except (TypeError, ValueError):
+        batch_size = 100
+
     properties = [
         'Title',
         'IUPACName',
@@ -600,12 +682,7 @@ def _build_pubchem_compounds_from_cids(
         'HeavyAtomCount',
         'Charge',
     ]
-    url = (
-        'https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/' +
-        ','.join(str(cid) for cid in cids) +
-        '/property/' + ','.join(properties) +
-        '/JSON'
-    )
+
     try:
         synonym_map: Dict[int, List[str]] = {}
         for raw in source_compounds or []:
@@ -616,33 +693,49 @@ def _build_pubchem_compounds_from_cids(
             if normalized.get('synonyms'):
                 synonym_map[cid] = normalized['synonyms']
 
-        data = _fetch_pubchem_json(url, timeout=timeout, endpoint_label='cid-property')
-        properties_list = data.get('PropertyTable', {}).get('Properties', [])
-        compounds = []
-        for idx, item in enumerate(properties_list):
-            cid = item.get('CID')
-            if cid is None and idx < len(cids):
-                cid = cids[idx]
-            compounds.append({
-                'CID': cid,
-                'Title': item.get('Title'),
-                'IUPACName': item.get('IUPACName'),
-                'IsomericSMILES': item.get('IsomericSMILES'),
-                'CanonicalSMILES': item.get('CanonicalSMILES'),
-                'InChI': item.get('InChI'),
-                'InChIKey': item.get('InChIKey'),
-                'MolecularWeight': item.get('MolecularWeight'),
-                'MonoisotopicMass': item.get('MonoisotopicMass'),
-                'ExactMass': item.get('ExactMass'),
-                'XLogP': item.get('XLogP'),
-                'TPSA': item.get('TPSA'),
-                'HBondDonorCount': item.get('HBondDonorCount'),
-                'HBondAcceptorCount': item.get('HBondAcceptorCount'),
-                'RotatableBondCount': item.get('RotatableBondCount'),
-                'HeavyAtomCount': item.get('HeavyAtomCount'),
-                'Charge': item.get('Charge'),
-                'synonyms': synonym_map.get(cid, []),
-            })
+        compounds: List[Dict[str, Any]] = []
+        total_batches = (len(ordered_cids) + batch_size - 1) // batch_size
+        for batch_index, start_idx in enumerate(range(0, len(ordered_cids), batch_size), start=1):
+            cid_chunk = ordered_cids[start_idx:start_idx + batch_size]
+            url = (
+                'https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/' +
+                ','.join(str(cid) for cid in cid_chunk) +
+                '/property/' + ','.join(properties) +
+                '/JSON'
+            )
+            logging.info(
+                f"PubChem 正在拉取属性批次 {batch_index}/{total_batches}，本批 CID 数: {len(cid_chunk)}"
+            )
+            data = _fetch_pubchem_json(url, timeout=timeout, endpoint_label='cid-property')
+            properties_list = data.get('PropertyTable', {}).get('Properties', [])
+            for idx, item in enumerate(properties_list):
+                cid = item.get('CID')
+                if cid is None and idx < len(cid_chunk):
+                    cid = cid_chunk[idx]
+                compounds.append({
+                    'CID': cid,
+                    'Title': item.get('Title'),
+                    'IUPACName': item.get('IUPACName'),
+                    'IsomericSMILES': item.get('IsomericSMILES'),
+                    'CanonicalSMILES': item.get('CanonicalSMILES'),
+                    'InChI': item.get('InChI'),
+                    'InChIKey': item.get('InChIKey'),
+                    'MolecularWeight': item.get('MolecularWeight'),
+                    'MonoisotopicMass': item.get('MonoisotopicMass'),
+                    'ExactMass': item.get('ExactMass'),
+                    'XLogP': item.get('XLogP'),
+                    'TPSA': item.get('TPSA'),
+                    'HBondDonorCount': item.get('HBondDonorCount'),
+                    'HBondAcceptorCount': item.get('HBondAcceptorCount'),
+                    'RotatableBondCount': item.get('RotatableBondCount'),
+                    'HeavyAtomCount': item.get('HeavyAtomCount'),
+                    'Charge': item.get('Charge'),
+                    'synonyms': synonym_map.get(cid, []),
+                })
+
+        logging.info(
+            f"PubChem CID 属性拉取完成，目标 CID 数: {len(ordered_cids)}，返回记录数: {len(compounds)}"
+        )
         return compounds
     except Exception as ex:
         logging.warning(f"PubChem REST 通过 CID 获取属性失败: {ex}")

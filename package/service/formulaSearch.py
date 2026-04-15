@@ -1,1 +1,1 @@
-from .formula_search_service import start_search
+from .formula_search_service import start_search, rerank_cached_compounds
