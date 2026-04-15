@@ -79,8 +79,8 @@ class FormulaSearchPage(BasePage):
         self.failed_formula_list = self._read_formula_list(self.failed_formula_file_path)
         self.waiting_formula_list = []
         self.success_formula_list = []
+        self.failed_reason_map = {}
         self.text_areas = {}
-        self.strict_filter_var = tk.BooleanVar(value=True)
         self.current_display_formula = None
 
     def _ensure_rdkit_available(self):
@@ -173,21 +173,6 @@ class FormulaSearchPage(BasePage):
             hover_bg=BaseConfig.ACCENT_COLOR,
         )
         self.rebuild_raw_button.grid(row=0, column=1, sticky="ew", padx=(BaseConfig.PADDING_B, 0))
-
-        self.strict_filter_checkbutton = self.widget_factory.create_checkbutton(
-            btn_frame,
-            text="严格过滤（多组分/IUPAC含;/同位素）",
-            variable=self.strict_filter_var,
-            command=self._on_toggle_strict_filter,
-            anchor='w',
-        )
-        self.strict_filter_checkbutton.grid(
-            row=1,
-            column=0,
-            columnspan=2,
-            sticky="w",
-            pady=(BaseConfig.PADDING_B, 0),
-        )
 
     def _setup_right_frame(self, labelname='分子式信息'):
         self.info_label = self.widget_factory.create_label(self.right_frame, text=labelname, **AppUIConfig.FunctionZone.FormulaSearchPage.right_label)
@@ -362,6 +347,8 @@ class FormulaSearchPage(BasePage):
             menu.add_command(label="发送到待搜索分子式", command=lambda s=state: self._send_selected_to_search_from_area(s))
         if area_name in ('本地已有分子式', '搜索成功分子式'):
             menu.add_command(label="查看分子式信息", command=lambda s=state: self._show_formula_info_from_area(s))
+        if area_name == '搜索失败分子式':
+            menu.add_command(label="查看失败原因", command=lambda s=state: self._show_failed_reason_from_area(s))
         menu.add_separator()
         menu.add_command(label="删除", command=lambda s=state: self._delete_selected_formulas(s))
         state['menu'] = menu
@@ -477,11 +464,25 @@ class FormulaSearchPage(BasePage):
         list_name = self._list_name_by_area(state['area_name'])
         if not list_name:
             return
+
         area_list = getattr(self, list_name)
-        for idx in indices:
-            formula = area_list[idx]
+        selected_formulas = [area_list[idx] for idx in indices if 0 <= idx < len(area_list)]
+        if not selected_formulas:
+            return
+
+        for formula in selected_formulas:
             if formula not in self.waiting_formula_list:
                 self.waiting_formula_list.append(formula)
+
+        if state['area_name'] == '搜索失败分子式':
+            for idx in sorted(indices, reverse=True):
+                if 0 <= idx < len(self.failed_formula_list):
+                    formula = self.failed_formula_list.pop(idx)
+                    if isinstance(self.failed_reason_map, dict):
+                        self.failed_reason_map.pop(formula, None)
+            self._write_formula_list(self.failed_formula_file_path, self.failed_formula_list)
+            self._update_formula_display(self.failed_formula_frame, self.failed_formula_list)
+
         self._update_formula_display(self.waiting_formula_frame, self.waiting_formula_list)
         state['selected_indices'].clear()
         state['anchor'] = None
@@ -508,6 +509,35 @@ class FormulaSearchPage(BasePage):
         if not (0 <= first_idx < len(formulas)):
             return
         self._show_formula_info(formulas[first_idx])
+
+    def _show_failed_reason_from_area(self, state):
+        indices = sorted(state['selected_indices'])
+        if not indices:
+            messagebox.showwarning("查看失败原因", "请先选中失败分子式")
+            return
+
+        list_name = self._list_name_by_area(state['area_name'])
+        if list_name != 'failed_formula_list':
+            return
+
+        formulas = getattr(self, list_name, [])
+        first_idx = indices[0]
+        if not (0 <= first_idx < len(formulas)):
+            return
+
+        formula = formulas[first_idx]
+        detail = self.failed_reason_map.get(formula, {}) if isinstance(self.failed_reason_map, dict) else {}
+        category = detail.get('category', 'other')
+        message = detail.get('message', 'unknown')
+        friendly = self._friendly_failed_reason(category, message)
+
+        content = (
+            f"分子式: {formula}\n"
+            f"失败类型: {category}\n"
+            f"友好说明: {friendly}\n"
+            f"原始详情: {message}"
+        )
+        messagebox.showinfo("失败原因详情", content)
 
     def _list_name_by_area(self, area_name):
         mapping = {
@@ -544,7 +574,6 @@ class FormulaSearchPage(BasePage):
             "web_name": "PubChem",
             "ion_mode": "both",
             "raw_only": raw_only,
-            "strict_filter": bool(self.strict_filter_var.get()),
         }
 
         self.thread_pool.submit(self._run_search_background, params)
@@ -620,6 +649,11 @@ class FormulaSearchPage(BasePage):
             merged_success.update(local_hit_results)
             merged_success.update(search_results.get("success", {}))
             failed_formulas = list(search_results.get("failed", []))
+            failed_details = search_results.get("failed_details", {}) if isinstance(search_results, dict) else {}
+            failed_stats = search_results.get("failed_stats", {}) if isinstance(search_results, dict) else {}
+
+            if isinstance(failed_details, dict):
+                self.failed_reason_map.update(failed_details)
 
             for formula in merged_success.keys():
                 if formula not in self.success_formula_list:
@@ -645,6 +679,7 @@ class FormulaSearchPage(BasePage):
             self.after(0, self._update_formula_display, self.existing_formula_frame, self.existing_formula_list)
             self.after(0, self._update_formula_display, self.failed_formula_frame, self.failed_formula_list)
             self.after(0, self._display_search_results, merged_success)
+            self.after(0, self._display_failed_summary, failed_formulas, failed_details, failed_stats)
             self._log_search_results(local_hit_results, search_results)
         except Exception as e:
             logging.error(f"搜索失败: {e}")
@@ -663,8 +698,63 @@ class FormulaSearchPage(BasePage):
             result_items = data.get("results", []) if isinstance(data, dict) else []
             logging.info(f"[PubChem检索成功] {formula}，记录数: {len(result_items)}")
 
+        failed_details = search_results.get("failed_details", {}) if isinstance(search_results, dict) else {}
         for formula in search_results.get("failed", []):
-            logging.warning(f"[PubChem检索失败] {formula}")
+            detail = failed_details.get(formula, {}) if isinstance(failed_details, dict) else {}
+            category = detail.get("category", "other")
+            message = detail.get("message", "unknown")
+            logging.warning(f"[PubChem检索失败] {formula} | 类型={category} | 详情={message}")
+
+        failed_stats = search_results.get("failed_stats", {}) if isinstance(search_results, dict) else {}
+        if isinstance(failed_stats, dict) and failed_stats:
+            logging.info(
+                "[PubChem失败统计] timeout=%s, no_compounds=%s, poll_limit=%s, other=%s",
+                failed_stats.get("timeout", 0),
+                failed_stats.get("no_compounds", 0),
+                failed_stats.get("poll_limit", 0),
+                failed_stats.get("other", 0),
+            )
+
+    def _friendly_failed_reason(self, category, message):
+        if message == "raw_only_no_cache":
+            return "仅重建模式下未命中 raw 缓存"
+        if category == "timeout":
+            return "请求超时（建议稍后重试）"
+        if category == "no_compounds":
+            return "无匹配结果"
+        if category == "poll_limit":
+            return "轮询超限（服务端仍在排队）"
+        return "未知错误"
+
+    def _display_failed_summary(self, failed_formulas, failed_details, failed_stats):
+        if not failed_formulas:
+            return
+
+        timeout_count = failed_stats.get("timeout", 0) if isinstance(failed_stats, dict) else 0
+        no_compounds_count = failed_stats.get("no_compounds", 0) if isinstance(failed_stats, dict) else 0
+        poll_limit_count = failed_stats.get("poll_limit", 0) if isinstance(failed_stats, dict) else 0
+        other_count = failed_stats.get("other", 0) if isinstance(failed_stats, dict) else 0
+
+        lines = [
+            "",
+            "==== 失败原因统计 ====",
+            f"超时: {timeout_count}",
+            f"空结果: {no_compounds_count}",
+            f"轮询超限: {poll_limit_count}",
+            f"其他: {other_count}",
+            "---- 失败明细 ----",
+        ]
+
+        for formula in failed_formulas:
+            detail = failed_details.get(formula, {}) if isinstance(failed_details, dict) else {}
+            category = detail.get("category", "other")
+            message = detail.get("message", "unknown")
+            friendly = self._friendly_failed_reason(category, message)
+            lines.append(f"{formula}: {friendly} ({category})")
+
+        self.result_text.config(state=tk.NORMAL)
+        self.result_text.insert(tk.END, "\n".join(lines) + "\n")
+        self.result_text.config(state=tk.DISABLED)
 
     def _render_structure_image(self, smiles, inchi=None):
         self._structure_photo = None
@@ -753,28 +843,26 @@ class FormulaSearchPage(BasePage):
         def _fmt_metric(value):
             return "N/A" if value is None else str(value)
 
-        lines = [
+        lines = ["Why Selected:"]
+        if why_selected:
+            for reason in why_selected:
+                lines.append(f"- {reason}")
+        else:
+            lines.append("- N/A")
+
+        lines.extend([
             f"CID: {cid}",
             f"IUPAC Name: {iupac_name}",
-            f"Molecular Weight: {mw}",
             f"Monoisotopic Mass: {mono}",
             f"Rank: {rank_text}",
             f"Final Score: {score_text}",
-            f"SMILES: {smiles if smiles else 'N/A'}",
-            f"InChI: {inchi}",
-            f"InChIKey: {inchikey}",
             f"XLogP: {_fmt_metric(xlogp)}",
             f"TPSA: {_fmt_metric(tpsa)}",
             f"H-Bond Donor Count: {_fmt_metric(hbd)}",
             f"H-Bond Acceptor Count: {_fmt_metric(hba)}",
             f"Charge: {_fmt_metric(charge)}",
             f"Score Breakdown (ionization/quality/prevalence): {_fmt_metric(ion_score)}/{_fmt_metric(quality_score)}/{_fmt_metric(prevalence_score)}",
-        ]
-
-        if why_selected:
-            lines.append("Why Selected:")
-            for reason in why_selected:
-                lines.append(f"- {reason}")
+        ])
 
         self.result_text.config(state=tk.NORMAL)
         self.result_text.delete('1.0', tk.END)
@@ -802,7 +890,7 @@ class FormulaSearchPage(BasePage):
         raw_results = results if isinstance(results, list) else []
         self.current_formula_results = self._filter_compound_results_for_display(raw_results)
         self.formula_info_label.config(
-            text=f"分子式: {formula} | 原始记录数: {len(raw_results)} | 展示记录数: {len(self.current_formula_results)}"
+            text=f"分子式: {formula} | 原始记录数: {len(raw_results)} | 严格过滤后展示数: {len(self.current_formula_results)}"
         )
 
         self.compound_listbox.delete(0, tk.END)
@@ -865,11 +953,5 @@ class FormulaSearchPage(BasePage):
     def _filter_compound_results_for_display(self, results):
         if not isinstance(results, list):
             return []
-        if not bool(self.strict_filter_var.get()):
-            return list(results)
 
         return [item for item in results if isinstance(item, dict) and not self._is_strict_filtered_item(item)]
-
-    def _on_toggle_strict_filter(self):
-        if self.current_display_formula:
-            self._show_formula_info(self.current_display_formula)

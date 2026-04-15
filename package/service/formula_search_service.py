@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+from ..config.base_config import BaseConfig
 from ..config.path_config import PathManager
 from ..service.public import ExporterFactory
 
@@ -31,9 +32,21 @@ class FormulaSearchResult:
 
 
 class FormulaSearch:
-    def __init__(self, max_retries: int = 1, retry_delay: int = 10):
+    def __init__(self, max_retries: int = 3, retry_delay: int = 2):
         self.max_retries = max_retries
         self.retry_delay = retry_delay
+        self.last_error_category = 'other'
+        self.last_error_message = 'unknown'
+
+    def _set_last_error(self, category: str, message: str):
+        self.last_error_category = category
+        self.last_error_message = message
+
+    def get_last_error(self) -> Dict[str, str]:
+        return {
+            'category': self.last_error_category,
+            'message': self.last_error_message,
+        }
 
     def get_compounds(self, formula: str):
         raise NotImplementedError
@@ -488,32 +501,88 @@ def _rank_compounds(compounds: List[Any], ion_mode: str = 'both', strict_filter:
     return ranked
 
 
-def _fetch_pubchem_json(url: str, timeout: int = 30) -> dict:
+def _fetch_pubchem_json(url: str, timeout: int = 30, endpoint_label: str = 'unknown') -> dict:
+    started_at = time.perf_counter()
     request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
     with urllib.request.urlopen(request, timeout=timeout) as response:
-        return json.loads(response.read().decode('utf-8'))
+        payload = json.loads(response.read().decode('utf-8'))
+    elapsed = time.perf_counter() - started_at
+    logging.info(f"PubChem {endpoint_label} 请求完成，耗时 {elapsed:.2f}s")
+    return payload
 
 
-def _parse_listkey_response(response: dict) -> Optional[List[int]]:
+def _parse_listkey_response(response: dict) -> Dict[str, Any]:
+    result: Dict[str, Any] = {'cids': None, 'listkey': None}
     if not isinstance(response, dict):
-        return None
+        return result
     if 'IdentifierList' in response and isinstance(response['IdentifierList'], dict):
         cid_list = response['IdentifierList'].get('CID')
         if isinstance(cid_list, list):
-            return [int(cid) for cid in cid_list if isinstance(cid, int)]
-    return None
+            result['cids'] = [int(cid) for cid in cid_list if isinstance(cid, int)]
+
+    waiting = response.get('Waiting')
+    if isinstance(waiting, dict):
+        listkey = waiting.get('ListKey')
+        if isinstance(listkey, str) and listkey.strip():
+            result['listkey'] = listkey.strip()
+    return result
+
+
+def _categorize_failure(message: str) -> str:
+    text = (message or '').lower()
+    if 'poll_limit' in text:
+        return 'poll_limit'
+    if 'timeout' in text or 'timed out' in text or 'pugrest.timeout' in text:
+        return 'timeout'
+    if 'no_compounds' in text or '未返回 cid' in text or '未匹配到任何化合物' in text:
+        return 'no_compounds'
+    return 'other'
+
+
+def _poll_pubchem_listkey(
+    listkey: str,
+    timeout: int = 30,
+    poll_interval: int = 2,
+    poll_max_attempts: int = 6,
+) -> Dict[str, Any]:
+    if not listkey:
+        return {'cids': None, 'error': 'poll_limit:empty_listkey'}
+
+    url = f'https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/listkey/{listkey}/cids/JSON'
+    for attempt in range(poll_max_attempts):
+        try:
+            response = _fetch_pubchem_json(url, timeout=timeout, endpoint_label='listkey')
+            parsed = _parse_listkey_response(response)
+            cids = parsed.get('cids')
+            if cids:
+                return {'cids': cids, 'error': None}
+
+            still_waiting = isinstance(response.get('Waiting'), dict)
+            if not still_waiting:
+                return {'cids': None, 'error': 'no_compounds:listkey_finished_without_cids'}
+
+            if attempt + 1 < poll_max_attempts:
+                logging.info(
+                    f"PubChem listkey 仍在处理中({attempt + 1}/{poll_max_attempts})，将在 {poll_interval}s 后继续轮询"
+                )
+                time.sleep(poll_interval)
+        except Exception as ex:
+            logging.warning(f"PubChem listkey 轮询失败({attempt + 1}/{poll_max_attempts}): {ex}")
+            if attempt + 1 < poll_max_attempts:
+                time.sleep(poll_interval)
+    return {'cids': None, 'error': f'poll_limit:listkey_exceeded_{poll_max_attempts}'}
 
 
 def _build_pubchem_compounds_from_cids(
     cids: List[int],
     max_records: int = 100,
     source_compounds: Optional[List[Any]] = None,
+    timeout: int = 30,
 ) -> List[Dict[str, Any]]:
     if not cids:
         return []
     cids = cids[:max_records]
     properties = [
-        'CID',
         'Title',
         'IUPACName',
         'IsomericSMILES',
@@ -547,11 +616,13 @@ def _build_pubchem_compounds_from_cids(
             if normalized.get('synonyms'):
                 synonym_map[cid] = normalized['synonyms']
 
-        data = _fetch_pubchem_json(url)
+        data = _fetch_pubchem_json(url, timeout=timeout, endpoint_label='cid-property')
         properties_list = data.get('PropertyTable', {}).get('Properties', [])
         compounds = []
-        for item in properties_list:
+        for idx, item in enumerate(properties_list):
             cid = item.get('CID')
+            if cid is None and idx < len(cids):
+                cid = cids[idx]
             compounds.append({
                 'CID': cid,
                 'Title': item.get('Title'),
@@ -597,71 +668,142 @@ def _extract_cids_from_compounds(compounds: List[Any]) -> List[int]:
     return cids
 
 
-def _try_pubchem_formula_search_rest(formula: str, fast: bool = False) -> Optional[List[int]]:
+def _try_pubchem_formula_search_rest(
+    formula: str,
+    fast: bool = False,
+    timeout: int = 30,
+    poll_interval: int = 2,
+    poll_max_attempts: int = 6,
+) -> Dict[str, Any]:
     encoded = urllib.parse.quote(formula)
     endpoint = 'fastformula' if fast else 'formula'
     url = f'https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/{endpoint}/{encoded}/cids/JSON'
     try:
-        response = _fetch_pubchem_json(url)
-        cids = _parse_listkey_response(response)
+        response = _fetch_pubchem_json(url, timeout=timeout, endpoint_label=endpoint)
+        parsed = _parse_listkey_response(response)
+        cids = parsed.get('cids')
         if cids:
-            return cids
-        # If the service returns Waiting, treat as not ready and fallback gracefully
-        if 'Waiting' in response:
-            logging.warning(f"PubChem {endpoint} 查询进入异步队列: {formula}")
-            return None
-        return None
+            return {'cids': cids, 'error': None, 'endpoint': endpoint}
+
+        listkey = parsed.get('listkey')
+        if listkey:
+            logging.info(f"PubChem {endpoint} 查询进入异步队列，listkey={listkey}")
+            poll_result = _poll_pubchem_listkey(
+                listkey,
+                timeout=timeout,
+                poll_interval=poll_interval,
+                poll_max_attempts=poll_max_attempts,
+            )
+            poll_result['endpoint'] = endpoint
+            return poll_result
+
+        return {'cids': None, 'error': f'no_compounds:{endpoint}_no_cids', 'endpoint': endpoint}
     except urllib.error.HTTPError as ex:
         if ex.code == 404:
-            return None
+            return {'cids': None, 'error': f'no_compounds:{endpoint}_404', 'endpoint': endpoint}
         logging.warning(f"PubChem REST {endpoint} 查询失败 {formula}: {ex}")
-        return None
+        return {'cids': None, 'error': f'other:{endpoint}_http_{ex.code}', 'endpoint': endpoint}
     except Exception as ex:
         logging.warning(f"PubChem REST {endpoint} 查询异常 {formula}: {ex}")
-        return None
+        return {'cids': None, 'error': f'timeout:{endpoint}:{ex}', 'endpoint': endpoint}
 
 
 class FormulaSearchPubChem(FormulaSearch):
+    def __init__(
+        self,
+        max_retries: int = 3,
+        retry_delay: int = 2,
+        http_timeout: int = 30,
+        poll_interval: int = 2,
+        poll_max_attempts: int = 6,
+        prefer_fastformula: bool = True,
+    ):
+        super().__init__(max_retries=max_retries, retry_delay=retry_delay)
+        self.http_timeout = max(5, int(http_timeout))
+        self.poll_interval = max(1, int(poll_interval))
+        self.poll_max_attempts = max(1, int(poll_max_attempts))
+        self.prefer_fastformula = bool(prefer_fastformula)
+
     def get_compounds(self, formula: str):
         formula = _normalize_formula(formula)
         if not formula:
             logging.warning("PubChem 查询时遇到空化学式。")
+            self._set_last_error('no_compounds', 'empty_formula')
             return None
 
+        self._set_last_error('other', 'unknown')
+
+        pcp = None
         try:
             import pubchempy as pcp
-        except ModuleNotFoundError as ex:
-            raise ImportError(
-                "PubChem 查询需要安装 pubchempy 库。请运行：pip install pubchempy"
-            ) from ex
+        except ModuleNotFoundError:
+            logging.warning("未安装 pubchempy，将仅使用 PubChem REST 路径检索")
+
+        endpoint_priority: List[bool]
+        if self.prefer_fastformula:
+            endpoint_priority = [True, False]
+        else:
+            endpoint_priority = [False, True]
 
         for attempt in range(self.max_retries):
+            current_attempt = attempt + 1
             try:
-                compounds = pcp.get_compounds(formula, 'formula')
-                if compounds:
-                    cids = _extract_cids_from_compounds(compounds)
-                    enriched_compounds = _build_pubchem_compounds_from_cids(cids, source_compounds=compounds)
-                    if enriched_compounds:
-                        return enriched_compounds
-                    return compounds
-                logging.warning(f"{formula} 未匹配到任何化合物")
-                return None
+                last_rest_error = 'no_compounds:no_cids_from_all_endpoints'
+                for use_fast in endpoint_priority:
+                    endpoint_name = 'fastformula' if use_fast else 'formula'
+                    rest_result = _try_pubchem_formula_search_rest(
+                        formula,
+                        fast=use_fast,
+                        timeout=self.http_timeout,
+                        poll_interval=self.poll_interval,
+                        poll_max_attempts=self.poll_max_attempts,
+                    )
+                    cids = rest_result.get('cids')
+                    endpoint_error = rest_result.get('error')
+                    if not cids:
+                        if endpoint_error:
+                            last_rest_error = endpoint_error
+                        logging.info(
+                            f"PubChem {endpoint_name} 未返回 CID({current_attempt}/{self.max_retries}) for {formula}"
+                        )
+                        continue
+
+                    compounds = _build_pubchem_compounds_from_cids(cids, timeout=self.http_timeout)
+                    if compounds:
+                        self._set_last_error('other', '')
+                        return compounds
+
+                if pcp is not None:
+                    compounds = pcp.get_compounds(formula, 'formula')
+                    if compounds:
+                        cids = _extract_cids_from_compounds(compounds)
+                        enriched_compounds = _build_pubchem_compounds_from_cids(
+                            cids,
+                            source_compounds=compounds,
+                            timeout=self.http_timeout,
+                        )
+                        if enriched_compounds:
+                            self._set_last_error('other', '')
+                            return enriched_compounds
+                        self._set_last_error('other', '')
+                        return compounds
+
+                self._set_last_error(_categorize_failure(last_rest_error), last_rest_error)
             except Exception as ex:
                 message = str(ex)
-                logging.warning(f"PubChem 请求失败({attempt + 1}/{self.max_retries}) for {formula}: {message}")
-                if attempt + 1 < self.max_retries:
-                    time.sleep(self.retry_delay)
-                if 'PUGREST.BadRequest' in message or 'BadRequest' in message:
-                    cids = _try_pubchem_formula_search_rest(formula, fast=True)
-                    if cids:
-                        compounds = _build_pubchem_compounds_from_cids(cids)
-                        if compounds:
-                            return compounds
-                    cids = _try_pubchem_formula_search_rest(formula, fast=False)
-                    if cids:
-                        return _build_pubchem_compounds_from_cids(cids)
+                self._set_last_error(_categorize_failure(message), message)
+                logging.warning(
+                    f"PubChem 请求失败({current_attempt}/{self.max_retries}) for {formula}: {message}"
+                )
+
+            if current_attempt < self.max_retries:
+                delay = self.retry_delay * (2 ** attempt)
+                logging.info(f"PubChem 即将重试 {formula}，等待 {delay}s")
+                time.sleep(delay)
 
         logging.error(f"PubChem 查询最终失败: {formula}")
+        if self.last_error_message in ('unknown', ''):
+            self._set_last_error('no_compounds', 'no_compounds:final_empty_result')
         return None
 
 
@@ -678,7 +820,17 @@ class SearchManager:
             logging.warning("未识别到任何化学式")
             return {"success": {}, "failed": []}
 
-        results = {"success": {}, "failed": []}
+        results = {
+            "success": {},
+            "failed": [],
+            "failed_details": {},
+            "failed_stats": {
+                "timeout": 0,
+                "no_compounds": 0,
+                "poll_limit": 0,
+                "other": 0,
+            },
+        }
         exporter = ExporterFactory.get_exporter(self.exporter_name)
         if exporter is None:
             raise ValueError(f"找不到导出器: {self.exporter_name}")
@@ -696,6 +848,11 @@ class SearchManager:
                     if self.raw_only:
                         logging.warning(f"分子式 {formula} 未命中 PubChem 原始缓存，raw_only 模式下跳过")
                         results["failed"].append(formula)
+                        results["failed_details"][formula] = {
+                            "category": "no_compounds",
+                            "message": "raw_only_no_cache",
+                        }
+                        results["failed_stats"]["no_compounds"] += 1
                         continue
 
                 compounds = self.searcher.get_compounds(formula)
@@ -706,9 +863,26 @@ class SearchManager:
                     results["success"][formula] = export_data
                 else:
                     results["failed"].append(formula)
+                    error_info = self.searcher.get_last_error() if hasattr(self.searcher, 'get_last_error') else {
+                        'category': 'other',
+                        'message': 'unknown',
+                    }
+                    category = error_info.get('category', 'other')
+                    if category not in results["failed_stats"]:
+                        category = 'other'
+                    results["failed_details"][formula] = {
+                        "category": category,
+                        "message": error_info.get('message', 'unknown'),
+                    }
+                    results["failed_stats"][category] += 1
             except Exception as ex:
                 logging.error(f"处理化学式 {formula} 失败: {ex}", exc_info=True)
                 results["failed"].append(formula)
+                results["failed_details"][formula] = {
+                    "category": "other",
+                    "message": str(ex),
+                }
+                results["failed_stats"]["other"] += 1
 
         return results
 
@@ -722,7 +896,14 @@ def start_search(
 ) -> Dict[str, Any]:
     web_name_lower = web_name.lower()
     if 'pubchem' in web_name_lower:
-        searcher = FormulaSearchPubChem()
+        searcher = FormulaSearchPubChem(
+            max_retries=BaseConfig.PUBCHEM_MAX_RETRIES,
+            retry_delay=BaseConfig.PUBCHEM_RETRY_BASE_DELAY_SEC,
+            http_timeout=BaseConfig.PUBCHEM_HTTP_TIMEOUT_SEC,
+            poll_interval=BaseConfig.PUBCHEM_POLL_INTERVAL_SEC,
+            poll_max_attempts=BaseConfig.PUBCHEM_POLL_MAX_ATTEMPTS,
+            prefer_fastformula=BaseConfig.PUBCHEM_PREFER_FASTFORMULA,
+        )
         exporter_name = 'json_formulaSearch_PubChem'
     else:
         raise ValueError(f"未知的 web_name: {web_name}")
