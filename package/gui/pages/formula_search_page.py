@@ -653,6 +653,7 @@ class FormulaSearchPage(BasePage):
             merged_success = {}
             merged_success.update(local_hit_results)
             merged_success.update(search_results.get("success", {}))
+            partial_formulas = list((search_results.get("partial", {}) or {}).keys()) if isinstance(search_results, dict) else []
             failed_formulas = list(search_results.get("failed", []))
             failed_details = search_results.get("failed_details", {}) if isinstance(search_results, dict) else {}
             failed_stats = search_results.get("failed_stats", {}) if isinstance(search_results, dict) else {}
@@ -684,7 +685,7 @@ class FormulaSearchPage(BasePage):
             self.after(0, self._update_formula_display, self.existing_formula_frame, self.existing_formula_list)
             self.after(0, self._update_formula_display, self.failed_formula_frame, self.failed_formula_list)
             self.after(0, self._display_search_results, merged_success)
-            self.after(0, self._display_failed_summary, failed_formulas, failed_details, failed_stats)
+            self.after(0, self._display_failed_summary, failed_formulas, failed_details, failed_stats, partial_formulas)
             self._log_search_results(local_hit_results, search_results)
         except Exception as e:
             logging.error(f"搜索失败: {e}")
@@ -699,9 +700,15 @@ class FormulaSearchPage(BasePage):
             result_items = data.get("results", []) if isinstance(data, dict) else []
             logging.info(f"[本地命中] {formula}，本地记录数: {len(result_items)}")
 
+        partial_details = search_results.get("partial", {}) if isinstance(search_results, dict) else {}
         for formula, data in search_results.get("success", {}).items():
             result_items = data.get("results", []) if isinstance(data, dict) else []
-            logging.info(f"[PubChem检索成功] {formula}，记录数: {len(result_items)}")
+            if formula in partial_details:
+                batch_summary = partial_details.get(formula, {}).get("batch_summary", {})
+                missing_count = len(batch_summary.get("missing_cids", [])) if isinstance(batch_summary, dict) else 0
+                logging.warning(f"[PubChem部分成功] {formula}，记录数: {len(result_items)}，待补拉 CID: {missing_count}")
+            else:
+                logging.info(f"[PubChem检索成功] {formula}，记录数: {len(result_items)}")
 
         failed_details = search_results.get("failed_details", {}) if isinstance(search_results, dict) else {}
         for formula in search_results.get("failed", []):
@@ -723,6 +730,8 @@ class FormulaSearchPage(BasePage):
     def _friendly_failed_reason(self, category, message):
         if message == "raw_only_no_cache":
             return "仅重建模式下未命中 raw 缓存"
+        if category == "partial":
+            return "部分批次成功，剩余失败批次已记录，可后续继续补拉"
         if category == "timeout":
             return "请求超时（建议稍后重试）"
         if category == "no_compounds":
@@ -731,8 +740,9 @@ class FormulaSearchPage(BasePage):
             return "轮询超限（服务端仍在排队）"
         return "未知错误"
 
-    def _display_failed_summary(self, failed_formulas, failed_details, failed_stats):
-        if not failed_formulas:
+    def _display_failed_summary(self, failed_formulas, failed_details, failed_stats, partial_formulas=None):
+        partial_formulas = partial_formulas or []
+        if not failed_formulas and not partial_formulas:
             return
 
         timeout_count = failed_stats.get("timeout", 0) if isinstance(failed_stats, dict) else 0
@@ -742,20 +752,30 @@ class FormulaSearchPage(BasePage):
 
         lines = [
             "",
-            "==== 失败原因统计 ====",
+            "==== 检索结果统计 ====",
+            f"部分成功: {len(partial_formulas)}",
             f"超时: {timeout_count}",
             f"空结果: {no_compounds_count}",
             f"轮询超限: {poll_limit_count}",
             f"其他: {other_count}",
-            "---- 失败明细 ----",
         ]
 
-        for formula in failed_formulas:
-            detail = failed_details.get(formula, {}) if isinstance(failed_details, dict) else {}
-            category = detail.get("category", "other")
-            message = detail.get("message", "unknown")
-            friendly = self._friendly_failed_reason(category, message)
-            lines.append(f"{formula}: {friendly} ({category})")
+        if partial_formulas:
+            lines.append("---- 部分成功明细 ----")
+            for formula in partial_formulas:
+                detail = failed_details.get(formula, {}) if isinstance(failed_details, dict) else {}
+                batch_summary = detail.get("batch_summary", {}) if isinstance(detail, dict) else {}
+                missing_count = len(batch_summary.get("missing_cids", [])) if isinstance(batch_summary, dict) else 0
+                lines.append(f"{formula}: 已保留部分结果，待补拉 CID {missing_count} 个")
+
+        if failed_formulas:
+            lines.append("---- 失败明细 ----")
+            for formula in failed_formulas:
+                detail = failed_details.get(formula, {}) if isinstance(failed_details, dict) else {}
+                category = detail.get("category", "other")
+                message = detail.get("message", "unknown")
+                friendly = self._friendly_failed_reason(category, message)
+                lines.append(f"{formula}: {friendly} ({category})")
 
         self.result_text.config(state=tk.NORMAL)
         self.result_text.insert(tk.END, "\n".join(lines) + "\n")

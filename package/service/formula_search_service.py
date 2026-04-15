@@ -7,7 +7,7 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from ..config.base_config import BaseConfig
 from ..config.path_config import PathManager
@@ -16,6 +16,7 @@ from ..service.public import ExporterFactory
 
 class SearchStatus(Enum):
     SUCCESS = "success"
+    PARTIAL = "partial"
     NO_COMPOUNDS_FOUND = "no_compounds"
     ERROR = "error"
 
@@ -134,8 +135,84 @@ def _compound_to_serializable(compound: Any) -> Dict[str, Any]:
     return data
 
 
-def _save_pubchem_raw_data(formula: str, compounds: List[Any]):
+def _dedupe_compounds_by_cid(compounds: List[Any]) -> List[Dict[str, Any]]:
+    deduped: List[Dict[str, Any]] = []
+    seen_keys = set()
+
+    for item in compounds or []:
+        serialized = _compound_to_serializable(item)
+        normalized = _normalize_pubchem_compound(serialized)
+        key = (
+            normalized.get('cid'),
+            normalized.get('inchikey') or '',
+            normalized.get('isomeric_smiles') or normalized.get('canonical_smiles') or '',
+            normalized.get('iupac_name') or '',
+        )
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        deduped.append(serialized)
+
+    return deduped
+
+
+def _build_batch_summary(
+    requested_cids: Optional[List[int]],
+    compounds: List[Any],
+    failed_batches: Optional[List[Dict[str, Any]]] = None,
+    total_batches: int = 0,
+) -> Dict[str, Any]:
+    completed_cids = _extract_cids_from_compounds(compounds)
+    completed_cid_set = set(completed_cids)
+
+    requested_unique: List[int] = []
+    for raw_cid in requested_cids or []:
+        cid = _safe_int(raw_cid)
+        if cid is None or cid in requested_unique:
+            continue
+        requested_unique.append(cid)
+
+    missing_cids = [cid for cid in requested_unique if cid not in completed_cid_set]
+    failure_count = len(failed_batches or [])
+    success_batches = max(0, total_batches - failure_count) if total_batches else 0
+
+    return {
+        'total_batches': total_batches,
+        'success_batches': success_batches,
+        'failed_batches': failure_count,
+        'completed_records': len(compounds or []),
+        'completed_cids': completed_cids,
+        'missing_cids': missing_cids,
+    }
+
+
+def _save_pubchem_raw_data(
+    formula: str,
+    compounds: Any,
+    status: str = 'success',
+    batch_summary: Optional[Dict[str, Any]] = None,
+    failed_batches: Optional[List[Dict[str, Any]]] = None,
+    error_message: Optional[str] = None,
+):
     try:
+        raw_items = compounds.get('compounds', []) if isinstance(compounds, dict) else compounds
+        save_status = status
+        save_error = error_message
+        save_batch_summary = batch_summary
+        save_failed_batches = failed_batches
+
+        if isinstance(compounds, dict):
+            if compounds.get('is_partial') and save_status == 'success':
+                save_status = 'partial'
+            if save_batch_summary is None:
+                save_batch_summary = compounds.get('batch_summary')
+            if save_failed_batches is None:
+                save_failed_batches = compounds.get('failed_batches')
+            if save_error is None:
+                save_error = compounds.get('error')
+
+        serialized_results = _dedupe_compounds_by_cid(raw_items if isinstance(raw_items, list) else [])
+
         path_manager = PathManager()
         raw_dir = path_manager.get_pubchem_raw_cache_path()
         timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -147,9 +224,13 @@ def _save_pubchem_raw_data(formula: str, compounds: List[Any]):
                 'formula': formula,
                 'export_time': datetime.datetime.now().isoformat(),
                 'source': 'pubchem_raw',
-                'record_count': len(compounds),
+                'record_count': len(serialized_results),
+                'status': save_status,
+                'error_message': save_error,
             },
-            'raw_results': [_compound_to_serializable(item) for item in compounds],
+            'raw_results': serialized_results,
+            'batch_summary': save_batch_summary or {},
+            'failed_batches': save_failed_batches or [],
         }
 
         with open(output_path, 'w', encoding='utf-8') as f:
@@ -160,7 +241,7 @@ def _save_pubchem_raw_data(formula: str, compounds: List[Any]):
         logging.warning(f"保存 PubChem 原始数据失败({formula}): {ex}")
 
 
-def _load_latest_pubchem_raw_results(formula: str) -> Optional[List[Any]]:
+def _load_latest_pubchem_raw_results(formula: str) -> Optional[Dict[str, Any]]:
     try:
         normalized_formula = _normalize_formula(formula)
         if not normalized_formula:
@@ -175,10 +256,25 @@ def _load_latest_pubchem_raw_results(formula: str) -> Optional[List[Any]]:
             try:
                 with open(file_path, 'r', encoding='utf-8') as f:
                     payload = json.load(f)
-                raw_results = payload.get('raw_results') if isinstance(payload, dict) else None
-                if isinstance(raw_results, list) and raw_results:
-                    logging.info(f"命中 PubChem 原始缓存并准备重处理: {file_path}")
-                    return raw_results
+                if not isinstance(payload, dict):
+                    continue
+
+                raw_results = payload.get('raw_results', [])
+                if not isinstance(raw_results, list):
+                    raw_results = []
+
+                metadata = payload.get('metadata', {}) if isinstance(payload.get('metadata', {}), dict) else {}
+                status = metadata.get('status', 'success')
+                if raw_results or status in ('partial', 'failed'):
+                    logging.info(f"命中 PubChem 原始缓存并准备重处理: {file_path} | status={status}")
+                    return {
+                        'metadata': metadata,
+                        'raw_results': raw_results,
+                        'batch_summary': payload.get('batch_summary', {}),
+                        'failed_batches': payload.get('failed_batches', []),
+                        'status': status,
+                        'file_path': str(file_path),
+                    }
             except Exception as ex:
                 logging.warning(f"读取 PubChem 原始缓存失败({file_path}): {ex}")
                 continue
@@ -589,6 +685,8 @@ def _parse_listkey_response(response: dict) -> Dict[str, Any]:
 
 def _categorize_failure(message: str) -> str:
     text = (message or '').lower()
+    if 'partial' in text:
+        return 'partial'
     if 'poll_limit' in text:
         return 'poll_limit'
     if 'timeout' in text or 'timed out' in text or 'pugrest.timeout' in text:
@@ -638,9 +736,19 @@ def _build_pubchem_compounds_from_cids(
     source_compounds: Optional[List[Any]] = None,
     timeout: int = 30,
     chunk_size: int = 100,
-) -> List[Dict[str, Any]]:
+    per_batch_retries: Optional[int] = None,
+    min_split_size: Optional[int] = None,
+    progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+) -> Dict[str, Any]:
     if not cids:
-        return []
+        empty_summary = _build_batch_summary([], [], [], 0)
+        return {
+            'compounds': [],
+            'failed_batches': [],
+            'batch_summary': empty_summary,
+            'is_partial': False,
+            'error': 'no_cids',
+        }
 
     ordered_cids: List[int] = []
     seen_cids = set()
@@ -657,12 +765,29 @@ def _build_pubchem_compounds_from_cids(
             ordered_cids = ordered_cids[:limit]
 
     if not ordered_cids:
-        return []
+        empty_summary = _build_batch_summary([], [], [], 0)
+        return {
+            'compounds': [],
+            'failed_batches': [],
+            'batch_summary': empty_summary,
+            'is_partial': False,
+            'error': 'no_cids',
+        }
 
     try:
         batch_size = max(1, int(chunk_size))
     except (TypeError, ValueError):
         batch_size = 100
+
+    try:
+        retries = max(1, int(per_batch_retries if per_batch_retries is not None else BaseConfig.PUBCHEM_PROPERTY_BATCH_RETRIES))
+    except (TypeError, ValueError):
+        retries = 2
+
+    try:
+        smallest_chunk = max(1, int(min_split_size if min_split_size is not None else BaseConfig.PUBCHEM_PROPERTY_MIN_CHUNK_SIZE))
+    except (TypeError, ValueError):
+        smallest_chunk = 1
 
     properties = [
         'Title',
@@ -683,63 +808,136 @@ def _build_pubchem_compounds_from_cids(
         'Charge',
     ]
 
-    try:
-        synonym_map: Dict[int, List[str]] = {}
-        for raw in source_compounds or []:
-            normalized = _normalize_pubchem_compound(raw)
-            cid = normalized.get('cid')
-            if cid is None:
-                continue
-            if normalized.get('synonyms'):
-                synonym_map[cid] = normalized['synonyms']
+    synonym_map: Dict[int, List[str]] = {}
+    for raw in source_compounds or []:
+        normalized = _normalize_pubchem_compound(raw)
+        cid = normalized.get('cid')
+        if cid is None:
+            continue
+        if normalized.get('synonyms'):
+            synonym_map[cid] = normalized['synonyms']
 
-        compounds: List[Dict[str, Any]] = []
-        total_batches = (len(ordered_cids) + batch_size - 1) // batch_size
-        for batch_index, start_idx in enumerate(range(0, len(ordered_cids), batch_size), start=1):
-            cid_chunk = ordered_cids[start_idx:start_idx + batch_size]
-            url = (
-                'https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/' +
-                ','.join(str(cid) for cid in cid_chunk) +
-                '/property/' + ','.join(properties) +
-                '/JSON'
-            )
-            logging.info(
-                f"PubChem 正在拉取属性批次 {batch_index}/{total_batches}，本批 CID 数: {len(cid_chunk)}"
-            )
-            data = _fetch_pubchem_json(url, timeout=timeout, endpoint_label='cid-property')
-            properties_list = data.get('PropertyTable', {}).get('Properties', [])
-            for idx, item in enumerate(properties_list):
-                cid = item.get('CID')
-                if cid is None and idx < len(cid_chunk):
-                    cid = cid_chunk[idx]
-                compounds.append({
-                    'CID': cid,
-                    'Title': item.get('Title'),
-                    'IUPACName': item.get('IUPACName'),
-                    'IsomericSMILES': item.get('IsomericSMILES'),
-                    'CanonicalSMILES': item.get('CanonicalSMILES'),
-                    'InChI': item.get('InChI'),
-                    'InChIKey': item.get('InChIKey'),
-                    'MolecularWeight': item.get('MolecularWeight'),
-                    'MonoisotopicMass': item.get('MonoisotopicMass'),
-                    'ExactMass': item.get('ExactMass'),
-                    'XLogP': item.get('XLogP'),
-                    'TPSA': item.get('TPSA'),
-                    'HBondDonorCount': item.get('HBondDonorCount'),
-                    'HBondAcceptorCount': item.get('HBondAcceptorCount'),
-                    'RotatableBondCount': item.get('RotatableBondCount'),
-                    'HeavyAtomCount': item.get('HeavyAtomCount'),
-                    'Charge': item.get('Charge'),
-                    'synonyms': synonym_map.get(cid, []),
-                })
+    def _request_chunk(cid_chunk: List[int], batch_index: int, split_depth: int = 0) -> Dict[str, Any]:
+        last_error = 'unknown'
+        for attempt in range(1, retries + 1):
+            try:
+                url = (
+                    'https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/' +
+                    ','.join(str(cid) for cid in cid_chunk) +
+                    '/property/' + ','.join(properties) +
+                    '/JSON'
+                )
+                logging.info(
+                    f"PubChem 正在拉取属性批次 {batch_index}/{total_batches}，本批 CID 数: {len(cid_chunk)}，尝试 {attempt}/{retries}"
+                )
+                data = _fetch_pubchem_json(url, timeout=timeout, endpoint_label='cid-property')
+                properties_list = data.get('PropertyTable', {}).get('Properties', [])
+                chunk_compounds: List[Dict[str, Any]] = []
+                for idx, item in enumerate(properties_list):
+                    cid = item.get('CID')
+                    if cid is None and idx < len(cid_chunk):
+                        cid = cid_chunk[idx]
+                    chunk_compounds.append({
+                        'CID': cid,
+                        'Title': item.get('Title'),
+                        'IUPACName': item.get('IUPACName'),
+                        'IsomericSMILES': item.get('IsomericSMILES'),
+                        'CanonicalSMILES': item.get('CanonicalSMILES'),
+                        'InChI': item.get('InChI'),
+                        'InChIKey': item.get('InChIKey'),
+                        'MolecularWeight': item.get('MolecularWeight'),
+                        'MonoisotopicMass': item.get('MonoisotopicMass'),
+                        'ExactMass': item.get('ExactMass'),
+                        'XLogP': item.get('XLogP'),
+                        'TPSA': item.get('TPSA'),
+                        'HBondDonorCount': item.get('HBondDonorCount'),
+                        'HBondAcceptorCount': item.get('HBondAcceptorCount'),
+                        'RotatableBondCount': item.get('RotatableBondCount'),
+                        'HeavyAtomCount': item.get('HeavyAtomCount'),
+                        'Charge': item.get('Charge'),
+                        'synonyms': synonym_map.get(cid, []),
+                    })
+                return {
+                    'compounds': chunk_compounds,
+                    'failed_batches': [],
+                }
+            except Exception as ex:
+                last_error = str(ex)
+                logging.warning(
+                    f"PubChem 属性批次 {batch_index}/{total_batches} 拉取失败，CID 数 {len(cid_chunk)}，尝试 {attempt}/{retries}: {ex}"
+                )
+                if attempt < retries:
+                    time.sleep(min(6, attempt))
 
-        logging.info(
-            f"PubChem CID 属性拉取完成，目标 CID 数: {len(ordered_cids)}，返回记录数: {len(compounds)}"
-        )
-        return compounds
-    except Exception as ex:
-        logging.warning(f"PubChem REST 通过 CID 获取属性失败: {ex}")
-        return []
+        if len(cid_chunk) > smallest_chunk:
+            split_point = max(1, len(cid_chunk) // 2)
+            logging.warning(
+                f"PubChem 属性批次 {batch_index}/{total_batches} 将拆分重试，原始大小 {len(cid_chunk)} -> {split_point}+{len(cid_chunk) - split_point}"
+            )
+            left_result = _request_chunk(cid_chunk[:split_point], batch_index, split_depth + 1)
+            right_result = _request_chunk(cid_chunk[split_point:], batch_index, split_depth + 1)
+            return {
+                'compounds': left_result.get('compounds', []) + right_result.get('compounds', []),
+                'failed_batches': left_result.get('failed_batches', []) + right_result.get('failed_batches', []),
+            }
+
+        return {
+            'compounds': [],
+            'failed_batches': [{
+                'batch_index': batch_index,
+                'split_depth': split_depth,
+                'cid_count': len(cid_chunk),
+                'cids': list(cid_chunk),
+                'reason': last_error,
+            }],
+        }
+
+    compounds: List[Dict[str, Any]] = []
+    failed_batches: List[Dict[str, Any]] = []
+    total_batches = (len(ordered_cids) + batch_size - 1) // batch_size
+
+    for batch_index, start_idx in enumerate(range(0, len(ordered_cids), batch_size), start=1):
+        cid_chunk = ordered_cids[start_idx:start_idx + batch_size]
+        chunk_result = _request_chunk(cid_chunk, batch_index)
+        compounds.extend(chunk_result.get('compounds', []))
+        failed_batches.extend(chunk_result.get('failed_batches', []))
+
+        current_compounds = _dedupe_compounds_by_cid(compounds)
+        current_summary = _build_batch_summary(ordered_cids, current_compounds, failed_batches, total_batches)
+        current_missing = current_summary.get('missing_cids', [])
+        current_payload = {
+            'compounds': current_compounds,
+            'failed_batches': list(failed_batches),
+            'batch_summary': current_summary,
+            'is_partial': bool(current_compounds) and bool(current_missing),
+            'error': 'partial_batch_failure' if current_missing else None,
+        }
+        if callable(progress_callback):
+            try:
+                progress_callback(current_payload)
+            except Exception as callback_ex:
+                logging.warning(f"PubChem 增量缓存回调失败: {callback_ex}")
+
+    compounds = _dedupe_compounds_by_cid(compounds)
+    batch_summary = _build_batch_summary(ordered_cids, compounds, failed_batches, total_batches)
+    missing_cids = batch_summary.get('missing_cids', [])
+    is_partial = bool(compounds) and bool(missing_cids)
+    error_message = None
+    if failed_batches and not compounds:
+        error_message = failed_batches[0].get('reason', 'cid_property_fetch_failed')
+    elif is_partial:
+        error_message = 'partial_batch_failure'
+
+    logging.info(
+        f"PubChem CID 属性拉取完成，目标 CID 数: {len(ordered_cids)}，返回记录数: {len(compounds)}，失败批次: {len(failed_batches)}"
+    )
+    return {
+        'compounds': compounds,
+        'failed_batches': failed_batches,
+        'batch_summary': batch_summary,
+        'is_partial': is_partial,
+        'error': error_message,
+    }
 
 
 def _extract_cids_from_compounds(compounds: List[Any]) -> List[int]:
@@ -810,12 +1008,20 @@ class FormulaSearchPubChem(FormulaSearch):
         poll_interval: int = 2,
         poll_max_attempts: int = 6,
         prefer_fastformula: bool = True,
+        property_batch_size: int = 100,
+        property_batch_retries: int = 2,
+        property_min_split_size: int = 1,
+        allow_partial_results: bool = True,
     ):
         super().__init__(max_retries=max_retries, retry_delay=retry_delay)
         self.http_timeout = max(5, int(http_timeout))
         self.poll_interval = max(1, int(poll_interval))
         self.poll_max_attempts = max(1, int(poll_max_attempts))
         self.prefer_fastformula = bool(prefer_fastformula)
+        self.property_batch_size = max(1, int(property_batch_size))
+        self.property_batch_retries = max(1, int(property_batch_retries))
+        self.property_min_split_size = max(1, int(property_min_split_size))
+        self.allow_partial_results = bool(allow_partial_results)
 
     def get_compounds(self, formula: str):
         formula = _normalize_formula(formula)
@@ -825,6 +1031,11 @@ class FormulaSearchPubChem(FormulaSearch):
             return None
 
         self._set_last_error('other', 'unknown')
+
+        cached_payload = _load_latest_pubchem_raw_results(formula) or {}
+        cached_compounds = cached_payload.get('raw_results', []) if isinstance(cached_payload, dict) else []
+        cached_failed_batches = cached_payload.get('failed_batches', []) if isinstance(cached_payload, dict) else []
+        cached_status = cached_payload.get('status', 'success') if isinstance(cached_payload, dict) else 'success'
 
         pcp = None
         try:
@@ -861,25 +1072,117 @@ class FormulaSearchPubChem(FormulaSearch):
                         )
                         continue
 
-                    compounds = _build_pubchem_compounds_from_cids(cids, timeout=self.http_timeout)
-                    if compounds:
-                        self._set_last_error('other', '')
-                        return compounds
+                    cached_cid_set = set(_extract_cids_from_compounds(cached_compounds))
+                    missing_cids = [cid for cid in cids if cid not in cached_cid_set]
+                    total_batches = (len(cids) + self.property_batch_size - 1) // self.property_batch_size
+
+                    if not missing_cids and cached_compounds:
+                        summary = _build_batch_summary(cids, cached_compounds, cached_failed_batches, total_batches)
+                        is_partial = bool(summary.get('missing_cids', [])) or cached_status == 'partial'
+                        result_payload = {
+                            'compounds': _dedupe_compounds_by_cid(cached_compounds),
+                            'failed_batches': cached_failed_batches,
+                            'batch_summary': summary,
+                            'is_partial': is_partial,
+                            'error': 'partial_cache_resume_pending' if is_partial else None,
+                        }
+                        if is_partial:
+                            self._set_last_error('partial', result_payload['error'] or 'partial_cache_resume_pending')
+                        else:
+                            self._set_last_error('other', '')
+                        return result_payload
+
+                    def _progress_callback(fetch_payload: Dict[str, Any]):
+                        if not BaseConfig.PUBCHEM_INCREMENTAL_CACHE_ENABLED:
+                            return
+                        merged_compounds = _dedupe_compounds_by_cid(cached_compounds + fetch_payload.get('compounds', []))
+                        merged_summary = _build_batch_summary(
+                            cids,
+                            merged_compounds,
+                            fetch_payload.get('failed_batches', []),
+                            total_batches,
+                        )
+                        save_status = 'partial' if merged_summary.get('missing_cids', []) else 'success'
+                        incremental_payload = {
+                            'compounds': merged_compounds,
+                            'failed_batches': fetch_payload.get('failed_batches', []),
+                            'batch_summary': merged_summary,
+                            'is_partial': save_status == 'partial',
+                            'error': fetch_payload.get('error'),
+                        }
+                        _save_pubchem_raw_data(formula, incremental_payload, status=save_status)
+
+                    fetch_result = _build_pubchem_compounds_from_cids(
+                        missing_cids,
+                        timeout=self.http_timeout,
+                        chunk_size=self.property_batch_size,
+                        per_batch_retries=self.property_batch_retries,
+                        min_split_size=self.property_min_split_size,
+                        progress_callback=_progress_callback,
+                    )
+                    merged_compounds = _dedupe_compounds_by_cid(cached_compounds + fetch_result.get('compounds', []))
+                    merged_summary = _build_batch_summary(cids, merged_compounds, fetch_result.get('failed_batches', []), total_batches)
+                    merged_missing = merged_summary.get('missing_cids', [])
+                    result_payload = {
+                        'compounds': merged_compounds,
+                        'failed_batches': fetch_result.get('failed_batches', []),
+                        'batch_summary': merged_summary,
+                        'is_partial': bool(merged_compounds) and bool(merged_missing),
+                        'error': fetch_result.get('error') or ('partial_batch_failure' if merged_missing else None),
+                    }
+
+                    if merged_compounds:
+                        if result_payload['is_partial']:
+                            self._set_last_error('partial', result_payload['error'] or 'partial_batch_failure')
+                            if self.allow_partial_results:
+                                return result_payload
+                        else:
+                            self._set_last_error('other', '')
+                            return result_payload
+
+                        last_rest_error = result_payload.get('error') or last_rest_error
 
                 if pcp is not None:
                     compounds = pcp.get_compounds(formula, 'formula')
                     if compounds:
                         cids = _extract_cids_from_compounds(compounds)
-                        enriched_compounds = _build_pubchem_compounds_from_cids(
+                        enriched_payload = _build_pubchem_compounds_from_cids(
                             cids,
                             source_compounds=compounds,
                             timeout=self.http_timeout,
+                            chunk_size=self.property_batch_size,
+                            per_batch_retries=self.property_batch_retries,
+                            min_split_size=self.property_min_split_size,
                         )
-                        if enriched_compounds:
-                            self._set_last_error('other', '')
-                            return enriched_compounds
+                        if enriched_payload.get('compounds'):
+                            if enriched_payload.get('is_partial'):
+                                self._set_last_error('partial', enriched_payload.get('error') or 'partial_batch_failure')
+                            else:
+                                self._set_last_error('other', '')
+                            return enriched_payload
+                        fallback_payload = {
+                            'compounds': _dedupe_compounds_by_cid(compounds),
+                            'failed_batches': [],
+                            'batch_summary': _build_batch_summary(cids, compounds, [], len(cids)),
+                            'is_partial': False,
+                            'error': None,
+                        }
                         self._set_last_error('other', '')
-                        return compounds
+                        return fallback_payload
+
+                if cached_compounds and self.allow_partial_results:
+                    partial_summary = cached_payload.get('batch_summary') if isinstance(cached_payload.get('batch_summary'), dict) else {}
+                    if not partial_summary:
+                        partial_summary = _build_batch_summary(None, cached_compounds, cached_failed_batches, 0)
+                    result_payload = {
+                        'compounds': _dedupe_compounds_by_cid(cached_compounds),
+                        'failed_batches': cached_failed_batches,
+                        'batch_summary': partial_summary,
+                        'is_partial': True,
+                        'error': last_rest_error,
+                    }
+                    self._set_last_error('partial', last_rest_error)
+                    return result_payload
 
                 self._set_last_error(_categorize_failure(last_rest_error), last_rest_error)
             except Exception as ex:
@@ -915,6 +1218,7 @@ class SearchManager:
 
         results = {
             "success": {},
+            "partial": {},
             "failed": [],
             "failed_details": {},
             "failed_stats": {
@@ -923,6 +1227,9 @@ class SearchManager:
                 "poll_limit": 0,
                 "other": 0,
             },
+            "partial_stats": {
+                "partial": 0,
+            },
         }
         exporter = ExporterFactory.get_exporter(self.exporter_name)
         if exporter is None:
@@ -930,15 +1237,44 @@ class SearchManager:
 
         for formula in formula_list:
             try:
+                raw_cached_payload = None
+                raw_cached_compounds: List[Any] = []
+                raw_cache_status = 'success'
+                raw_failed_batches: List[Dict[str, Any]] = []
+                raw_batch_summary: Dict[str, Any] = {}
+
                 if self.exporter_name == 'json_formulaSearch_PubChem':
-                    raw_cached_compounds = _load_latest_pubchem_raw_results(formula)
-                    if raw_cached_compounds:
+                    raw_cached_payload = _load_latest_pubchem_raw_results(formula)
+                    if raw_cached_payload:
+                        raw_cached_compounds = raw_cached_payload.get('raw_results', []) if isinstance(raw_cached_payload, dict) else []
+                        raw_cache_status = raw_cached_payload.get('status', 'success') if isinstance(raw_cached_payload, dict) else 'success'
+                        raw_failed_batches = raw_cached_payload.get('failed_batches', []) if isinstance(raw_cached_payload, dict) else []
+                        raw_batch_summary = raw_cached_payload.get('batch_summary', {}) if isinstance(raw_cached_payload, dict) else {}
+
+                    if raw_cached_compounds and raw_cache_status == 'success' and not self.raw_only:
                         ranked_compounds = _rank_compounds(raw_cached_compounds, ion_mode=self.ion_mode, strict_filter=self.strict_filter)
                         export_data = exporter.export((formula, ranked_compounds))
                         results["success"][formula] = export_data
                         logging.info(f"分子式 {formula} 使用 PubChem 原始缓存重处理完成")
                         continue
+
                     if self.raw_only:
+                        if raw_cached_compounds:
+                            ranked_compounds = _rank_compounds(raw_cached_compounds, ion_mode=self.ion_mode, strict_filter=self.strict_filter)
+                            export_data = exporter.export((formula, ranked_compounds))
+                            results["success"][formula] = export_data
+                            if raw_cache_status == 'partial':
+                                results["partial"][formula] = {
+                                    "category": "partial",
+                                    "message": "partial_cache_rebuild",
+                                    "batch_summary": raw_batch_summary,
+                                    "failed_batches": raw_failed_batches,
+                                }
+                                results["failed_details"][formula] = results["partial"][formula]
+                                results["partial_stats"]["partial"] += 1
+                            logging.info(f"分子式 {formula} 在 raw_only 模式下重建完成，status={raw_cache_status}")
+                            continue
+
                         logging.warning(f"分子式 {formula} 未命中 PubChem 原始缓存，raw_only 模式下跳过")
                         results["failed"].append(formula)
                         results["failed_details"][formula] = {
@@ -948,12 +1284,37 @@ class SearchManager:
                         results["failed_stats"]["no_compounds"] += 1
                         continue
 
-                compounds = self.searcher.get_compounds(formula)
-                if compounds:
-                    _save_pubchem_raw_data(formula, compounds)
-                    ranked_compounds = _rank_compounds(compounds, ion_mode=self.ion_mode, strict_filter=self.strict_filter)
+                search_payload = self.searcher.get_compounds(formula)
+                payload_compounds = search_payload.get('compounds', []) if isinstance(search_payload, dict) else search_payload
+                payload_is_partial = bool(search_payload.get('is_partial')) if isinstance(search_payload, dict) else False
+                payload_failed_batches = search_payload.get('failed_batches', []) if isinstance(search_payload, dict) else []
+                payload_batch_summary = search_payload.get('batch_summary', {}) if isinstance(search_payload, dict) else {}
+                payload_error = search_payload.get('error') if isinstance(search_payload, dict) else None
+
+                if payload_compounds:
+                    save_status = 'partial' if payload_is_partial else 'success'
+                    _save_pubchem_raw_data(
+                        formula,
+                        search_payload,
+                        status=save_status,
+                        batch_summary=payload_batch_summary,
+                        failed_batches=payload_failed_batches,
+                        error_message=payload_error,
+                    )
+                    ranked_compounds = _rank_compounds(payload_compounds, ion_mode=self.ion_mode, strict_filter=self.strict_filter)
                     export_data = exporter.export((formula, ranked_compounds))
                     results["success"][formula] = export_data
+
+                    if payload_is_partial:
+                        partial_detail = {
+                            "category": "partial",
+                            "message": payload_error or 'partial_batch_failure',
+                            "batch_summary": payload_batch_summary,
+                            "failed_batches": payload_failed_batches,
+                        }
+                        results["partial"][formula] = partial_detail
+                        results["failed_details"][formula] = partial_detail
+                        results["partial_stats"]["partial"] += 1
                 else:
                     results["failed"].append(formula)
                     error_info = self.searcher.get_last_error() if hasattr(self.searcher, 'get_last_error') else {
@@ -996,6 +1357,10 @@ def start_search(
             poll_interval=BaseConfig.PUBCHEM_POLL_INTERVAL_SEC,
             poll_max_attempts=BaseConfig.PUBCHEM_POLL_MAX_ATTEMPTS,
             prefer_fastformula=BaseConfig.PUBCHEM_PREFER_FASTFORMULA,
+            property_batch_size=BaseConfig.PUBCHEM_PROPERTY_BATCH_SIZE,
+            property_batch_retries=BaseConfig.PUBCHEM_PROPERTY_BATCH_RETRIES,
+            property_min_split_size=BaseConfig.PUBCHEM_PROPERTY_MIN_CHUNK_SIZE,
+            allow_partial_results=BaseConfig.PUBCHEM_ALLOW_PARTIAL_RESULTS,
         )
         exporter_name = 'json_formulaSearch_PubChem'
     else:
