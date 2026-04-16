@@ -93,6 +93,12 @@ BIOLOGICAL_RECORD_MARKERS = (
     'HMDB', 'KEGG', 'LIPIDMAPS', 'DRUGBANK', 'METLIN', 'BIOCYC'
 )
 
+KNOWN_BIOACTIVE_NAME_MARKERS = (
+    'IBUPROFEN', 'DEXIBUPROFEN', 'NAPROXEN', 'DICLOFENAC', 'KETOPROFEN',
+    'FLURBIPROFEN', 'FENOPROFEN', 'ASPIRIN', 'PARACETAMOL', 'ACETAMINOPHEN',
+    'LIDOCAINE', 'CAFFEINE', 'CHOLESTEROL', 'GLUCOSE'
+)
+
 
 def _normalize_formula(formula: str) -> str:
     if not isinstance(formula, str):
@@ -214,9 +220,10 @@ def _save_pubchem_raw_data(
         serialized_results = _dedupe_compounds_by_cid(raw_items if isinstance(raw_items, list) else [])
 
         path_manager = PathManager()
-        raw_dir = path_manager.get_pubchem_raw_cache_path()
+        safe_formula = _safe_formula_filename(formula)
+        raw_dir = path_manager.ensure_pubchem_formula_cache_dir(safe_formula)
         timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-        file_name = f"pubchem_raw_{_safe_formula_filename(formula)}_{timestamp}.json"
+        file_name = f"pubchem_raw_{safe_formula}_{timestamp}.json"
         output_path = raw_dir / file_name
 
         payload = {
@@ -249,8 +256,17 @@ def _load_latest_pubchem_raw_results(formula: str) -> Optional[Dict[str, Any]]:
 
         path_manager = PathManager()
         raw_dir = path_manager.get_pubchem_raw_cache_path()
-        file_pattern = f"pubchem_raw_{_safe_formula_filename(normalized_formula)}_*.json"
-        candidates = sorted(raw_dir.glob(file_pattern), key=lambda item: item.stat().st_mtime, reverse=True)
+        safe_formula = _safe_formula_filename(normalized_formula)
+        file_pattern = f"pubchem_raw_{safe_formula}_*.json"
+
+        candidate_paths = []
+        formula_dir = path_manager.get_pubchem_formula_cache_dir(safe_formula)
+        if formula_dir.exists():
+            candidate_paths.extend(formula_dir.glob(file_pattern))
+        candidate_paths.extend(raw_dir.glob(file_pattern))
+
+        unique_candidates = {str(item): item for item in candidate_paths}
+        candidates = sorted(unique_candidates.values(), key=lambda item: item.stat().st_mtime, reverse=True)
 
         for file_path in candidates:
             try:
@@ -329,6 +345,49 @@ def _estimate_prevalence_from_synonyms(synonyms: List[str]) -> float:
     raw_score = min(len(synonyms), 60) / 60.0
     trusted_bonus = min(trusted_count, 12) / 48.0
     return max(0.0, min(1.0, raw_score + trusted_bonus))
+
+
+def _normalize_text_key(text: Any) -> str:
+    if not isinstance(text, str):
+        return ''
+    return ''.join(ch.lower() for ch in text.strip() if ch.isalnum())
+
+
+def _estimate_prevalence_from_compound(compound: Dict[str, Any]) -> float:
+    synonyms = compound.get('synonyms', []) if isinstance(compound.get('synonyms', []), list) else []
+    synonym_score = _estimate_prevalence_from_synonyms(synonyms)
+    if synonym_score > 0.0:
+        return synonym_score
+
+    marker_info = _collect_reference_markers(compound)
+    public_markers = marker_info.get('public_markers', [])
+    bio_markers = marker_info.get('bio_markers', [])
+
+    title = compound.get('title')
+    iupac_name = compound.get('iupac_name')
+    title_key = _normalize_text_key(title)
+    iupac_key = _normalize_text_key(iupac_name)
+    combined_text = ' | '.join(
+        value.strip().upper()
+        for value in (title, iupac_name)
+        if isinstance(value, str) and value.strip()
+    )
+
+    fallback_score = 0.0
+    if public_markers:
+        fallback_score += min(len(public_markers), 3) * 0.08
+    if bio_markers:
+        fallback_score += min(len(bio_markers), 3) * 0.05
+
+    if title_key and iupac_key and title_key != iupac_key:
+        fallback_score += 0.12
+        if len(title_key) + 8 < len(iupac_key):
+            fallback_score += 0.08
+
+    if any(marker in combined_text for marker in KNOWN_BIOACTIVE_NAME_MARKERS):
+        fallback_score += 0.15
+
+    return max(0.0, min(0.35, fallback_score))
 
 
 def _collect_reference_markers(compound: Dict[str, Any]) -> Dict[str, List[str]]:
@@ -597,7 +656,7 @@ def _rank_compounds(compounds: List[Any], ion_mode: str = 'both', strict_filter:
     for compound in normalized_compounds:
         ion_score = _ionization_likelihood_score(compound, mode)
         quality_score = _record_quality_score(compound)
-        base_prevalence_score = _estimate_prevalence_from_synonyms(compound.get('synonyms', []))
+        base_prevalence_score = _estimate_prevalence_from_compound(compound)
         commercial_boost = _commercial_availability_boost(compound.get('synonyms', []))
         prevalence_score = max(0.0, min(1.0, base_prevalence_score + commercial_boost))
         marker_info = _collect_reference_markers(compound)
@@ -730,6 +789,95 @@ def _poll_pubchem_listkey(
     return {'cids': None, 'error': f'poll_limit:listkey_exceeded_{poll_max_attempts}'}
 
 
+def _fetch_pubchem_synonym_map(
+    cids: List[int],
+    timeout: int = 30,
+    chunk_size: int = 100,
+    per_batch_retries: int = 2,
+    min_split_size: int = 1,
+) -> Dict[str, Any]:
+    ordered_cids: List[int] = []
+    seen_cids = set()
+    for raw_cid in cids or []:
+        cid = _safe_int(raw_cid)
+        if cid is None or cid in seen_cids:
+            continue
+        seen_cids.add(cid)
+        ordered_cids.append(cid)
+
+    if not ordered_cids:
+        return {'synonym_map': {}, 'failed_batches': []}
+
+    batch_size = max(1, int(chunk_size or 100))
+    retries = max(1, int(per_batch_retries or 2))
+    smallest_chunk = max(1, int(min_split_size or 1))
+    total_batches = (len(ordered_cids) + batch_size - 1) // batch_size
+
+    def _request_chunk(cid_chunk: List[int], batch_index: int, split_depth: int = 0) -> Dict[str, Any]:
+        last_error = 'unknown'
+        for attempt in range(1, retries + 1):
+            try:
+                url = (
+                    'https://pubchem.ncbi.nlm.nih.gov/rest/pug/compound/cid/' +
+                    ','.join(str(cid) for cid in cid_chunk) +
+                    '/synonyms/JSON'
+                )
+                logging.info(
+                    f"PubChem 正在拉取同义词批次 {batch_index}/{total_batches}，本批 CID 数: {len(cid_chunk)}，尝试 {attempt}/{retries}"
+                )
+                data = _fetch_pubchem_json(url, timeout=timeout, endpoint_label='cid-synonyms')
+                info_list = data.get('InformationList', {}).get('Information', [])
+                chunk_map: Dict[int, List[str]] = {}
+                for item in info_list:
+                    cid = _safe_int(item.get('CID'))
+                    synonyms = _normalize_synonyms(item.get('Synonym', []))
+                    if cid is not None and synonyms:
+                        chunk_map[cid] = synonyms
+                return {
+                    'synonym_map': chunk_map,
+                    'failed_batches': [],
+                }
+            except Exception as ex:
+                last_error = str(ex)
+                logging.warning(
+                    f"PubChem 同义词批次 {batch_index}/{total_batches} 拉取失败，CID 数 {len(cid_chunk)}，尝试 {attempt}/{retries}: {ex}"
+                )
+                if attempt < retries:
+                    time.sleep(min(6, attempt))
+
+        if len(cid_chunk) > smallest_chunk:
+            split_point = max(1, len(cid_chunk) // 2)
+            left_result = _request_chunk(cid_chunk[:split_point], batch_index, split_depth + 1)
+            right_result = _request_chunk(cid_chunk[split_point:], batch_index, split_depth + 1)
+            merged_map = dict(left_result.get('synonym_map', {}))
+            merged_map.update(right_result.get('synonym_map', {}))
+            return {
+                'synonym_map': merged_map,
+                'failed_batches': left_result.get('failed_batches', []) + right_result.get('failed_batches', []),
+            }
+
+        return {
+            'synonym_map': {},
+            'failed_batches': [{
+                'batch_index': batch_index,
+                'split_depth': split_depth,
+                'cid_count': len(cid_chunk),
+                'cids': list(cid_chunk),
+                'reason': f'synonym_fetch_failed:{last_error}',
+            }],
+        }
+
+    synonym_map: Dict[int, List[str]] = {}
+    failed_batches: List[Dict[str, Any]] = []
+    for batch_index, start_idx in enumerate(range(0, len(ordered_cids), batch_size), start=1):
+        cid_chunk = ordered_cids[start_idx:start_idx + batch_size]
+        chunk_result = _request_chunk(cid_chunk, batch_index)
+        synonym_map.update(chunk_result.get('synonym_map', {}))
+        failed_batches.extend(chunk_result.get('failed_batches', []))
+
+    return {'synonym_map': synonym_map, 'failed_batches': failed_batches}
+
+
 def _build_pubchem_compounds_from_cids(
     cids: List[int],
     max_records: Optional[int] = None,
@@ -817,6 +965,21 @@ def _build_pubchem_compounds_from_cids(
         if normalized.get('synonyms'):
             synonym_map[cid] = normalized['synonyms']
 
+    missing_synonym_cids = [cid for cid in ordered_cids if cid not in synonym_map]
+    synonym_fetch_failures: List[Dict[str, Any]] = []
+    if missing_synonym_cids:
+        synonym_fetch_result = _fetch_pubchem_synonym_map(
+            missing_synonym_cids,
+            timeout=timeout,
+            chunk_size=batch_size,
+            per_batch_retries=retries,
+            min_split_size=smallest_chunk,
+        )
+        synonym_map.update(synonym_fetch_result.get('synonym_map', {}))
+        synonym_fetch_failures = synonym_fetch_result.get('failed_batches', [])
+        if synonym_fetch_failures:
+            logging.warning(f"PubChem 同义词补全存在失败批次: {len(synonym_fetch_failures)}")
+
     def _request_chunk(cid_chunk: List[int], batch_index: int, split_depth: int = 0) -> Dict[str, Any]:
         last_error = 'unknown'
         for attempt in range(1, retries + 1):
@@ -893,7 +1056,7 @@ def _build_pubchem_compounds_from_cids(
         }
 
     compounds: List[Dict[str, Any]] = []
-    failed_batches: List[Dict[str, Any]] = []
+    failed_batches: List[Dict[str, Any]] = list(synonym_fetch_failures)
     total_batches = (len(ordered_cids) + batch_size - 1) // batch_size
 
     for batch_index, start_idx in enumerate(range(0, len(ordered_cids), batch_size), start=1):
@@ -921,11 +1084,14 @@ def _build_pubchem_compounds_from_cids(
     compounds = _dedupe_compounds_by_cid(compounds)
     batch_summary = _build_batch_summary(ordered_cids, compounds, failed_batches, total_batches)
     missing_cids = batch_summary.get('missing_cids', [])
-    is_partial = bool(compounds) and bool(missing_cids)
+    synonym_gap = bool(synonym_fetch_failures) and any(cid not in synonym_map for cid in ordered_cids)
+    is_partial = (bool(compounds) and bool(missing_cids)) or (bool(compounds) and synonym_gap)
     error_message = None
     if failed_batches and not compounds:
         error_message = failed_batches[0].get('reason', 'cid_property_fetch_failed')
-    elif is_partial:
+    elif bool(compounds) and synonym_gap:
+        error_message = 'partial_synonym_enrichment'
+    elif bool(compounds) and bool(missing_cids):
         error_message = 'partial_batch_failure'
 
     logging.info(

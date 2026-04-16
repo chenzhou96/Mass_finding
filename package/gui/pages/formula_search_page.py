@@ -666,7 +666,7 @@ class FormulaSearchPage(BasePage):
                     self.success_formula_list.append(formula)
                 if formula not in self.existing_formula_list:
                     self.existing_formula_list.append(formula)
-                has_raw = any(self.path_manager.get_pubchem_raw_cache_path().glob(f"pubchem_raw_{formula}_*.json"))
+                has_raw = self.path_manager.has_pubchem_raw_cache(formula)
                 if formula not in self.raw_data_formula_list and has_raw:
                     self.raw_data_formula_list.append(formula)
 
@@ -923,7 +923,7 @@ class FormulaSearchPage(BasePage):
         raw_results = results if isinstance(results, list) else []
         self.current_formula_results = self._filter_compound_results_for_display(raw_results)
         self.formula_info_label.config(
-            text=f"分子式: {formula} | 原始记录数: {len(raw_results)} | 严格过滤后展示数: {len(self.current_formula_results)}"
+            text=f"分子式: {formula} | 过滤后展示数: {len(self.current_formula_results)}"
         )
 
         self.compound_listbox.delete(0, tk.END)

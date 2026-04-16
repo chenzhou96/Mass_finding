@@ -58,6 +58,14 @@ def _get_cache_path(parent_path: Path, folder_name: str) -> Path:
     except OSError as e:
         logging.error(f"创建文件夹 {folder_name} 失败\n错误信息: {e}")
         raise EnvironmentError(f"Failed to create mass_finding_cache folder: {e}")
+
+def _safe_formula_path_name(formula: str) -> str:
+    normalized = str(formula or '').strip().replace(' ', '')
+    keep = []
+    for ch in normalized:
+        if ch.isalnum() or ch in ('_', '-', '.'):
+            keep.append(ch)
+    return ''.join(keep) or 'unknown_formula'
     
 class PathManager:
     def __init__(self):
@@ -94,6 +102,25 @@ class PathManager:
             self.get_mass_finding_cache_path()
         self.pubchem_raw_cache_path = _get_cache_path(self.mass_finding_cache_path, 'pubchem_raw_cache')
         return self.pubchem_raw_cache_path
+
+    def get_pubchem_formula_cache_dir(self, formula: str) -> Path:
+        raw_cache_dir = self.get_pubchem_raw_cache_path()
+        return raw_cache_dir / _safe_formula_path_name(formula)
+
+    def ensure_pubchem_formula_cache_dir(self, formula: str) -> Path:
+        formula_dir = self.get_pubchem_formula_cache_dir(formula)
+        formula_dir.mkdir(parents=True, exist_ok=True)
+        return formula_dir
+
+    def has_pubchem_raw_cache(self, formula: str) -> bool:
+        safe_formula = _safe_formula_path_name(formula)
+        file_pattern = f"pubchem_raw_{safe_formula}_*.json"
+        raw_cache_dir = self.get_pubchem_raw_cache_path()
+        formula_dir = raw_cache_dir / safe_formula
+
+        has_nested = formula_dir.exists() and any(formula_dir.glob(file_pattern))
+        has_legacy = any(raw_cache_dir.glob(file_pattern))
+        return has_nested or has_legacy
 
     def get_structure_preview_cache_path(self) -> Path:
         if not hasattr(self, 'mass_finding_cache_path'):

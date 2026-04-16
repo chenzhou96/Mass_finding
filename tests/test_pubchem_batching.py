@@ -1,11 +1,19 @@
+import sys
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from package.service.formula_search_service import (
     SearchStatus,
     FormulaSearchResult,
     SearchManager,
     _build_pubchem_compounds_from_cids,
+    _load_latest_pubchem_raw_results,
+    _rank_compounds,
+    _save_pubchem_raw_data,
 )
 
 
@@ -37,6 +45,85 @@ class DummyExporter:
 
 
 class PubChemBatchingTests(unittest.TestCase):
+    def test_property_fetch_enriches_synonyms_from_pubchem_endpoint(self):
+        def fake_fetch(url, timeout=30, endpoint_label="unknown"):
+            if "/property/" in url:
+                cid_text = url.split('/cid/')[1].split('/property/')[0]
+                cid_values = [int(item) for item in cid_text.split(',') if item]
+                return {
+                    "PropertyTable": {
+                        "Properties": [
+                            {
+                                "CID": cid,
+                                "Title": "Ibuprofen, (+-)-" if cid == 3672 else f"Compound {cid}",
+                                "IUPACName": "2-[4-(2-methylpropyl)phenyl]propanoic acid" if cid == 3672 else f"Compound {cid}",
+                                "MolecularWeight": 206.28,
+                                "MonoisotopicMass": 206.130679813,
+                            }
+                            for cid in cid_values
+                        ]
+                    }
+                }
+            if "/synonyms/" in url:
+                cid_text = url.split('/cid/')[1].split('/synonyms/')[0]
+                cid_values = [int(item) for item in cid_text.split(',') if item]
+                return {
+                    "InformationList": {
+                        "Information": [
+                            {
+                                "CID": cid,
+                                "Synonym": ["Ibuprofen", "Advil", "DrugBank: DB01050"] if cid == 3672 else [f"Compound {cid}"]
+                            }
+                            for cid in cid_values
+                        ]
+                    }
+                }
+            raise AssertionError(f"unexpected url: {url}")
+
+        with patch("package.service.formula_search_service._fetch_pubchem_json", side_effect=fake_fetch):
+            result = _build_pubchem_compounds_from_cids([3672], chunk_size=10, per_batch_retries=1)
+
+        self.assertEqual(result["compounds"][0]["synonyms"], ["Ibuprofen", "Advil", "DrugBank: DB01050"])
+
+    def test_ranking_uses_title_fallback_when_synonyms_are_missing(self):
+        compounds = [
+            {
+                "cid": 3672,
+                "title": "Ibuprofen, (+-)-",
+                "iupac_name": "2-[4-(2-methylpropyl)phenyl]propanoic acid",
+                "inchi": "InChI=1S/C13H18O2/test",
+                "inchikey": "HEFNNWSXXWATRW-UHFFFAOYSA-N",
+                "monoisotopic_mass": 206.130679813,
+                "molecular_weight": 206.28,
+                "xlogp": 3.5,
+                "tpsa": 37.3,
+                "hbond_donor_count": 1,
+                "hbond_acceptor_count": 2,
+                "charge": 0,
+                "synonyms": [],
+            },
+            {
+                "cid": 23235,
+                "title": "Hexyl benzoate",
+                "iupac_name": "hexyl benzoate",
+                "inchi": "InChI=1S/C13H18O2/other",
+                "inchikey": "UUGLJVMIFJNVFH-UHFFFAOYSA-N",
+                "monoisotopic_mass": 206.130679813,
+                "molecular_weight": 206.28,
+                "xlogp": 3.5,
+                "tpsa": 37.3,
+                "hbond_donor_count": 1,
+                "hbond_acceptor_count": 2,
+                "charge": 0,
+                "synonyms": [],
+            },
+        ]
+
+        ranked = _rank_compounds(compounds, ion_mode="both", strict_filter=True)
+
+        self.assertEqual(ranked[0]["cid"], 3672)
+        self.assertGreater(ranked[0]["score_breakdown"]["prevalence"], 0.0)
+
     def test_partial_batch_failure_preserves_successful_compounds(self):
         calls = {"count": 0}
 
@@ -92,6 +179,53 @@ class PubChemBatchingTests(unittest.TestCase):
         self.assertEqual(results["partial_stats"]["partial"], 1)
         detail = results["failed_details"]["TEST_PARTIAL_FORMULA"]
         self.assertEqual(detail["category"], "partial")
+
+    def test_pubchem_raw_cache_is_saved_under_formula_folder(self):
+        with TemporaryDirectory() as temp_dir:
+            raw_cache_root = Path(temp_dir)
+            fake_path_manager = type("FakePathManager", (), {
+                "get_pubchem_raw_cache_path": lambda self: raw_cache_root,
+                "get_pubchem_formula_cache_dir": lambda self, formula: raw_cache_root / str(formula),
+                "ensure_pubchem_formula_cache_dir": lambda self, formula: ((raw_cache_root / str(formula)).mkdir(parents=True, exist_ok=True) or (raw_cache_root / str(formula))),
+            })()
+
+            with patch("package.service.formula_search_service.PathManager", return_value=fake_path_manager):
+                _save_pubchem_raw_data("C13H18O2", [{"cid": 3672, "iupac_name": "ibuprofen"}])
+
+            formula_dir = raw_cache_root / "C13H18O2"
+            saved_files = list(formula_dir.glob("pubchem_raw_C13H18O2_*.json"))
+            self.assertTrue(formula_dir.exists())
+            self.assertEqual(len(saved_files), 1)
+
+    def test_pubchem_raw_cache_loader_supports_formula_folder_and_legacy_flat_files(self):
+        with TemporaryDirectory() as temp_dir:
+            raw_cache_root = Path(temp_dir)
+            fake_path_manager = type("FakePathManager", (), {
+                "get_pubchem_raw_cache_path": lambda self: raw_cache_root,
+                "get_pubchem_formula_cache_dir": lambda self, formula: raw_cache_root / str(formula),
+                "ensure_pubchem_formula_cache_dir": lambda self, formula: ((raw_cache_root / str(formula)).mkdir(parents=True, exist_ok=True) or (raw_cache_root / str(formula))),
+            })()
+
+            legacy_file = raw_cache_root / "pubchem_raw_C2H7NO2_20260416_010101.json"
+            legacy_file.write_text(
+                '{"metadata":{"formula":"C2H7NO2"},"raw_results":[{"cid":1}]}',
+                encoding="utf-8",
+            )
+
+            formula_dir = raw_cache_root / "C13H18O2"
+            formula_dir.mkdir(parents=True, exist_ok=True)
+            nested_file = formula_dir / "pubchem_raw_C13H18O2_20260416_020202.json"
+            nested_file.write_text(
+                '{"metadata":{"formula":"C13H18O2"},"raw_results":[{"cid":3672}]}',
+                encoding="utf-8",
+            )
+
+            with patch("package.service.formula_search_service.PathManager", return_value=fake_path_manager):
+                nested_payload = _load_latest_pubchem_raw_results("C13H18O2")
+                legacy_payload = _load_latest_pubchem_raw_results("C2H7NO2")
+
+            self.assertEqual(nested_payload["metadata"]["formula"], "C13H18O2")
+            self.assertEqual(legacy_payload["metadata"]["formula"], "C2H7NO2")
 
 
 if __name__ == "__main__":

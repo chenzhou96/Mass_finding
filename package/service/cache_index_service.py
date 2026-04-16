@@ -31,7 +31,7 @@ def _scan_existing_formulas(path_manager: PathManager) -> List[str]:
 def _scan_raw_data_formulas(path_manager: PathManager) -> List[str]:
     cache_dir = path_manager.get_pubchem_raw_cache_path()
     formulas = set()
-    for file_path in cache_dir.glob('pubchem_raw_*.json'):
+    for file_path in cache_dir.rglob('pubchem_raw_*.json'):
         match = _PUBCHEM_RAW_CACHE_PATTERN.match(file_path.name)
         if not match:
             continue
