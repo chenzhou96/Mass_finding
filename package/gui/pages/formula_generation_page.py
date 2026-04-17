@@ -276,6 +276,7 @@ class FormulaGenerationPage(BasePage):
         self.applied_conditions_signature = []
         self.is_filter_dirty = False
         self._current_table_context = {"row_id": "", "column_name": "", "cell_value": ""}
+        self._table_selection_anchor = None
 
         # 筛选行视觉样式（局部样式，不影响其他页面）
         self.filter_row_even_bg = "#fafafa"
@@ -331,7 +332,7 @@ class FormulaGenerationPage(BasePage):
             columns=columns,
             displaycolumns=['M/Z', 'Adduct', 'Mol Weight', 'DBR'],
             show="headings",
-            selectmode="browse",
+            selectmode="extended",
             xscrollcommand=hsb.set,
             yscrollcommand=vsb.set
         )
@@ -357,9 +358,11 @@ class FormulaGenerationPage(BasePage):
         self.table_popup_menu = self.widget_factory.create_menu(self.table, tearoff=0)
         self.table_popup_menu.add_command(label="按当前列添加筛选", command=self._add_filter_from_table_context)
         self.table_popup_menu.add_separator()
-        self.table_popup_menu.add_command(label="发送到分子式 bus", command=self._send_selected_row_to_bus)
+        self.table_popup_menu.add_command(label="发送选中项到分子式 bus", command=self._send_selected_row_to_bus)
         self.table_popup_menu.add_separator()
         self.table_popup_menu.add_command(label="删除", command=self._delete_selected_row)
+        self.table.bind("<ButtonPress-1>", self._on_table_left_press, add="+")
+        self.table.bind("<B1-Motion>", self._on_table_drag_select, add="+")
         self.table.bind("<Button-3>", self._on_table_right_click)
 
         self.table.bind("<Double-1>", self._on_table_double_click)
@@ -1149,27 +1152,36 @@ class FormulaGenerationPage(BasePage):
     def _map_data(self, raw_data):
         mapped = []
         for item in raw_data:
+            formula_data = item.get("formula", item.get("elements", {})) or {}
             row = {
                 "M/Z": self._format_float(item["calculated_properties"].get("predicted_mz", "")),
                 "Adduct": item["adduct_type"],
                 "Mol Weight": self._format_float(item["calculated_properties"].get("molecular_weight", "")),
                 "DBR": item["calculated_properties"].get("dbr", ""),
-                "C": item["formula"].get("C", ""),
-                "H": item["formula"].get("H", ""),
-                "N": item["formula"].get("N", ""),
-                "O": item["formula"].get("O", ""),
-                "S": item["formula"].get("S", ""),
-                "P": item["formula"].get("P", ""),
-                "Si": item["formula"].get("Si", ""),
-                "F": item["formula"].get("F", ""),
-                "Cl": item["formula"].get("Cl", ""),
-                "Br": item["formula"].get("Br", ""),
-                "I": item["formula"].get("I", ""),
-                "B": item["formula"].get("B", ""),
-                "Se": item["formula"].get("Se", ""),  
+                "C": self._normalize_element_count(formula_data.get("C", 0)),
+                "H": self._normalize_element_count(formula_data.get("H", 0)),
+                "N": self._normalize_element_count(formula_data.get("N", 0)),
+                "O": self._normalize_element_count(formula_data.get("O", 0)),
+                "S": self._normalize_element_count(formula_data.get("S", 0)),
+                "P": self._normalize_element_count(formula_data.get("P", 0)),
+                "Si": self._normalize_element_count(formula_data.get("Si", 0)),
+                "F": self._normalize_element_count(formula_data.get("F", 0)),
+                "Cl": self._normalize_element_count(formula_data.get("Cl", 0)),
+                "Br": self._normalize_element_count(formula_data.get("Br", 0)),
+                "I": self._normalize_element_count(formula_data.get("I", 0)),
+                "B": self._normalize_element_count(formula_data.get("B", 0)),
+                "Se": self._normalize_element_count(formula_data.get("Se", 0)),
             }
             mapped.append(row)
         return mapped
+
+    def _normalize_element_count(self, value):
+        if value in ("", None):
+            return 0
+        try:
+            return int(float(value))
+        except (ValueError, TypeError):
+            return 0
 
     def _format_float(self, value):
         """统一浮点数格式化方法"""
@@ -1318,6 +1330,30 @@ class FormulaGenerationPage(BasePage):
         self._add_filter_condition_row(preset=preset)
         self.filter_feedback_label.configure(text=f"已从表格添加草稿条件: {column_name} {preset['operator']} {cell_value}")
 
+    def _on_table_left_press(self, event):
+        row_id = self.table.identify_row(event.y)
+        self._table_selection_anchor = row_id or None
+
+    def _on_table_drag_select(self, event):
+        if not self._table_selection_anchor:
+            return
+
+        target_row = self.table.identify_row(event.y)
+        if not target_row:
+            return "break"
+
+        children = self.table.get_children()
+        try:
+            start_idx = children.index(self._table_selection_anchor)
+            end_idx = children.index(target_row)
+        except ValueError:
+            return "break"
+
+        selected_rows = children[min(start_idx, end_idx):max(start_idx, end_idx) + 1]
+        self.table.selection_set(selected_rows)
+        self.table.focus(target_row)
+        return "break"
+
     def _on_table_double_click(self, event):
         item = self.table.selection()
         if not item:
@@ -1351,7 +1387,10 @@ class FormulaGenerationPage(BasePage):
                 column_name = ""
 
         if row_id:
-            self.table.selection_set(row_id)
+            current_selection = set(self.table.selection())
+            if row_id not in current_selection:
+                self.table.selection_set(row_id)
+            self.table.focus(row_id)
             if column_name:
                 values = self.table.item(row_id, "values")
                 try:
@@ -1388,53 +1427,78 @@ class FormulaGenerationPage(BasePage):
         return "break"
 
     def _send_selected_row_to_bus(self):
-        item = self.table.selection()
-        if not item:
-            return
-        item = item[0]
-        tags = self.table.item(item, 'tags')
-        if not tags:
-            return
-        try:
-            data = json.loads(tags[0])
-        except Exception as e:
-            logging.error(f"无法解析数据项: {e}")
+        selected_items = self.table.selection()
+        if not selected_items:
+            messagebox.showwarning("发送失败", "请先选中要发送的分子式")
             return
 
-        formula_str = self._formula_from_row_data(data)
-        self.event_mgr.publish(EventType.ADD_FORMULA, data=formula_str, priority=EventPriority.NORMAL)
-        logging.info(f"已发送 {formula_str} 到分子式 bus")
+        formulas_to_send = []
+        for row_id in selected_items:
+            tags = self.table.item(row_id, 'tags')
+            if not tags:
+                continue
+            try:
+                data = json.loads(tags[0])
+            except Exception as e:
+                logging.error(f"无法解析数据项: {e}")
+                continue
+
+            formula_str = self._formula_from_row_data(data)
+            if formula_str and formula_str not in formulas_to_send:
+                formulas_to_send.append(formula_str)
+
+        if not formulas_to_send:
+            messagebox.showwarning("发送失败", "未能从选中项中解析出有效分子式")
+            return
+
+        payload = formulas_to_send if len(formulas_to_send) > 1 else formulas_to_send[0]
+        self.event_mgr.publish(EventType.ADD_FORMULA, data=payload, priority=EventPriority.NORMAL)
+        logging.info(f"已发送 {len(formulas_to_send)} 个分子式到分子式 bus: {', '.join(formulas_to_send)}")
+        messagebox.showinfo("发送成功", f"已发送 {len(formulas_to_send)} 个分子式到分子式 bus")
 
     def _delete_selected_row(self):
-        item = self.table.selection()
-        if not item:
+        selected_row_ids = self.table.selection()
+        if not selected_row_ids:
             messagebox.showwarning("删除失败", "请先选中要删除的行")
             return
 
-        row_id = item[0]
-        tags = self.table.item(row_id, 'tags')
-        formula_str = None
-        if tags:
+        selected_formulas = []
+        selected_tags = []
+        for row_id in selected_row_ids:
+            tags = self.table.item(row_id, 'tags')
+            if not tags:
+                continue
+            selected_tags.append(tags[0])
             try:
                 data = json.loads(tags[0])
                 formula_str = self._formula_from_row_data(data)
+                if formula_str:
+                    selected_formulas.append(formula_str)
             except Exception as e:
                 logging.error(f"无法解析数据项: {e}")
 
-        if not messagebox.askyesno("确认删除", f"是否删除选中的分子式？{chr(10)}{formula_str if formula_str else ''}"):
+        preview_text = chr(10).join(selected_formulas[:10]) if selected_formulas else ""
+        if len(selected_formulas) > 10:
+            preview_text += f"{chr(10)}... 共 {len(selected_formulas)} 个"
+
+        if not messagebox.askyesno("确认删除", f"是否删除选中的分子式？{chr(10)}{preview_text}"):
             return
 
-        if tags:
-            try:
-                data = json.loads(tags[0])
-                filtered_data = [item for item in self.data if json.dumps(item, ensure_ascii=False) != tags[0]]
-                self.data = filtered_data
-            except Exception:
-                pass
+        if selected_tags:
+            remaining_data = []
+            pending_tags = list(selected_tags)
+            for data_item in self.data:
+                encoded = json.dumps(data_item, ensure_ascii=False)
+                if encoded in pending_tags:
+                    pending_tags.remove(encoded)
+                    continue
+                remaining_data.append(data_item)
+            self.data = remaining_data
 
-        self.table.delete(row_id)
+        for row_id in selected_row_ids:
+            self.table.delete(row_id)
         self._apply_filters()
-        logging.info(f"删除分子式: {formula_str}")
+        logging.info(f"删除分子式 {len(selected_row_ids)} 条")
 
     def _formula_from_row_data(self, data):
         elements_order = ['C', 'H', 'N', 'O', 'S', 'P', 'Si', 'F', 'Cl', 'Br', 'I', 'B', 'Se']

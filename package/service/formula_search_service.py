@@ -449,6 +449,11 @@ def _strict_filter_reasons(compound: Dict[str, Any]) -> List[str]:
     if covalent_unit > 1:
         reasons.append('多组分结构(covalent_unit>1)')
 
+    # 新增：InChI含“.”视为多组分结构
+    inchi = compound.get('inchi') or compound.get('InChI')
+    if isinstance(inchi, str) and '.' in inchi:
+        reasons.append('多组分结构(InChI含“.”)')
+
     iupac_name = compound.get('iupac_name')
     if isinstance(iupac_name, str) and ';' in iupac_name:
         reasons.append('IUPAC 名称包含分号')

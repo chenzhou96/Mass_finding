@@ -80,6 +80,7 @@ class PathManager:
         self.existing_formula_filename = "existing_formula.json"
         self.raw_data_formula_filename = "raw_data_formula.json"
         self.failed_formula_filename = "failed_formula.json"
+        self.partial_formula_filename = "partial_formula.json"
 
     def get_mass_finding_cache_path(self) -> Path:
         self.mass_finding_cache_path = _get_cache_path(self.root_dir, 'mass_finding_cache')
