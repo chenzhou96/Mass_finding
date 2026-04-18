@@ -770,7 +770,15 @@ def _categorize_failure(message: str) -> str:
         return 'poll_limit'
     if 'timeout' in text or 'timed out' in text or 'pugrest.timeout' in text:
         return 'timeout'
-    if 'no_compounds' in text or '未返回 cid' in text or '未匹配到任何化合物' in text:
+    if (
+        'no_compounds' in text or
+        '未返回 cid' in text or
+        '未匹配到任何化合物' in text or
+        'failed to get any cid' in text or
+        'pugrest.badrequest' in text or
+        'http error 400' in text or
+        'http error 404' in text
+    ):
         return 'no_compounds'
     return 'other'
 
@@ -802,8 +810,16 @@ def _poll_pubchem_listkey(
                     f"PubChem listkey 仍在处理中({attempt + 1}/{poll_max_attempts})，将在 {poll_interval}s 后继续轮询"
                 )
                 time.sleep(poll_interval)
+        except urllib.error.HTTPError as ex:
+            logging.warning(f"PubChem listkey 轮询失败({attempt + 1}/{poll_max_attempts}): {ex}")
+            if ex.code in (400, 404):
+                return {'cids': None, 'error': f'no_compounds:listkey_http_{ex.code}'}
+            if attempt + 1 < poll_max_attempts:
+                time.sleep(poll_interval)
         except Exception as ex:
             logging.warning(f"PubChem listkey 轮询失败({attempt + 1}/{poll_max_attempts}): {ex}")
+            if _categorize_failure(str(ex)) == 'no_compounds':
+                return {'cids': None, 'error': f'no_compounds:listkey_exception:{ex}'}
             if attempt + 1 < poll_max_attempts:
                 time.sleep(poll_interval)
     return {'cids': None, 'error': f'poll_limit:listkey_exceeded_{poll_max_attempts}'}
@@ -1176,8 +1192,8 @@ def _try_pubchem_formula_search_rest(
 
         return {'cids': None, 'error': f'no_compounds:{endpoint}_no_cids', 'endpoint': endpoint}
     except urllib.error.HTTPError as ex:
-        if ex.code == 404:
-            return {'cids': None, 'error': f'no_compounds:{endpoint}_404', 'endpoint': endpoint}
+        if ex.code in (400, 404):
+            return {'cids': None, 'error': f'no_compounds:{endpoint}_http_{ex.code}', 'endpoint': endpoint}
         logging.warning(f"PubChem REST {endpoint} 查询失败 {formula}: {ex}")
         return {'cids': None, 'error': f'other:{endpoint}_http_{ex.code}', 'endpoint': endpoint}
     except Exception as ex:
@@ -1328,7 +1344,12 @@ class FormulaSearchPubChem(FormulaSearch):
 
                         last_rest_error = result_payload.get('error') or last_rest_error
 
-                if pcp is not None:
+                rest_error_category = _categorize_failure(last_rest_error)
+                if rest_error_category == 'no_compounds' and not cached_compounds:
+                    self._set_last_error('no_compounds', last_rest_error)
+                    return None
+
+                if pcp is not None and rest_error_category != 'no_compounds':
                     compounds = pcp.get_compounds(formula, 'formula')
                     if compounds:
                         cids = _extract_cids_from_compounds(compounds)

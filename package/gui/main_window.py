@@ -51,12 +51,17 @@ class APP(tk.Tk):
 
     def _set_icon(self):
         system = platform.system()
-        if system == "Windows":
-            self.iconbitmap(self.path_manager.ico_path)
-        elif system == "Darwin":
-            image = Image.open(self.path_manager.icns_path)
-            icon = ImageTk.PhotoImage(image)
-            self.iconphoto(True, icon)
+        try:
+            if system == "Windows" and self.path_manager.ico_path.exists():
+                self.iconbitmap(str(self.path_manager.ico_path))
+            elif system == "Darwin" and self.path_manager.icns_path.exists():
+                image = Image.open(self.path_manager.icns_path)
+                icon = ImageTk.PhotoImage(image)
+                self.iconphoto(True, icon)
+            else:
+                logging.warning("未找到可用图标资源，已跳过窗口图标设置")
+        except Exception as ex:
+            logging.warning(f"设置窗口图标失败: {ex}")
 
     def _init_components(self):
         """优化后的组件初始化"""

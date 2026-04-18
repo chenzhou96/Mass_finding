@@ -87,6 +87,7 @@ class FormulaSearchPage(BasePage):
         self.failed_reason_map = {}
         self.text_areas = {}
         self.current_display_formula = None
+        self._pending_no_compounds_formulas = []
 
     def _ensure_rdkit_available(self):
         if self._rdkit_checked:
@@ -509,11 +510,18 @@ class FormulaSearchPage(BasePage):
             else:
                 self.partial_formula_map.pop(formula, None)
         else:
-            if formula not in self.failed_formula_list:
-                self.failed_formula_list.append(formula)
-            if detail:
-                self.failed_reason_map[formula] = detail
-            self.partial_formula_map.pop(formula, None)
+            category = detail.get("category", "other")
+            if category == "no_compounds":
+                self.failed_formula_list = [f for f in self.failed_formula_list if f != formula]
+                self.failed_reason_map.pop(formula, None)
+                self.partial_formula_map.pop(formula, None)
+                self._queue_no_compounds_notice(formula)
+            else:
+                if formula not in self.failed_formula_list:
+                    self.failed_formula_list.append(formula)
+                if detail:
+                    self.failed_reason_map[formula] = detail
+                self.partial_formula_map.pop(formula, None)
 
         self._write_formula_list(self.existing_formula_file_path, self.existing_formula_list)
         self._write_formula_list(self.raw_data_formula_file_path, self.raw_data_formula_list)
@@ -527,7 +535,8 @@ class FormulaSearchPage(BasePage):
             category = detail.get("category", "other")
             failed_stats = {"timeout": 0, "no_compounds": 0, "poll_limit": 0, "other": 0}
             failed_stats[category if category in failed_stats else "other"] += 1
-            self._display_failed_summary([formula], {formula: detail}, failed_stats, [])
+            failed_items = [] if category == "no_compounds" else [formula]
+            self._display_failed_summary(failed_items, {formula: detail}, failed_stats, [])
 
     def _formula_dict_to_string(self, formula_dict):
         order = ['C', 'H', 'N', 'O', 'S', 'P', 'Si', 'F', 'Cl', 'Br', 'I', 'B', 'Se']
@@ -809,6 +818,14 @@ class FormulaSearchPage(BasePage):
             self.event_mgr.publish(EventType.STATUS_UPDATE, data={"status_text": "done"})
             return
 
+        waiting_changed = False
+        for formula in formula_list:
+            if formula and formula not in self.waiting_formula_list:
+                self.waiting_formula_list.append(formula)
+                waiting_changed = True
+        if waiting_changed:
+            self._update_formula_display(self.waiting_formula_frame, self.waiting_formula_list)
+
         self.event_mgr.publish(
             EventType.STATUS_UPDATE,
             data={"status_text": "running..."}
@@ -848,6 +865,20 @@ class FormulaSearchPage(BasePage):
             messagebox.showinfo("一键补救", "当前没有可补救的分子式")
             return
 
+        for formula in remedy_targets:
+            if formula not in self.waiting_formula_list:
+                self.waiting_formula_list.append(formula)
+
+        moved_failed = set(self.failed_formula_list)
+        if moved_failed:
+            self.failed_formula_list = []
+            for formula in moved_failed:
+                if isinstance(self.failed_reason_map, dict):
+                    self.failed_reason_map.pop(formula, None)
+            self._write_formula_list(self.failed_formula_file_path, self.failed_formula_list)
+            self._update_formula_display(self.failed_formula_frame, self.failed_formula_list)
+
+        self._update_formula_display(self.waiting_formula_frame, self.waiting_formula_list)
         logging.info(f"开始一键补救，目标分子式数量: {len(remedy_targets)}")
         self._run_search(target_formulas=remedy_targets)
 
@@ -961,6 +992,7 @@ class FormulaSearchPage(BasePage):
         finally:
             self.after(0, self._set_action_buttons_enabled, True)
             self.after(0, self.event_mgr.publish, EventType.STATUS_UPDATE, {"status_text": "done"})
+            self.after(100, self._flush_pending_no_compounds_notices)
 
     def _log_search_results(self, local_hit_results, search_results):
         for formula, data in local_hit_results.items():
@@ -1007,6 +1039,46 @@ class FormulaSearchPage(BasePage):
             return "轮询超限（服务端仍在排队）"
         return "未知错误"
 
+    def _queue_no_compounds_notice(self, formula):
+        if not formula:
+            return
+        pending = getattr(self, "_pending_no_compounds_formulas", None)
+        if not isinstance(pending, list):
+            pending = []
+            self._pending_no_compounds_formulas = pending
+        if formula not in pending:
+            pending.append(formula)
+
+    def _flush_pending_no_compounds_notices(self):
+        pending = list(getattr(self, "_pending_no_compounds_formulas", []) or [])
+        if not pending:
+            return
+
+        self._pending_no_compounds_formulas = []
+        logging.info("以下分子式未检索到匹配化合物，已自动移除: %s", ", ".join(pending))
+
+        if len(pending) == 1:
+            content = f"分子式 {pending[0]} 在 PubChem 中没有匹配化合物，已自动从列表中移除。"
+        else:
+            joined = "、".join(pending)
+            content = f"以下分子式在 PubChem 中没有匹配化合物，已自动从列表中移除：\n{joined}"
+
+        try:
+            parent = self.winfo_toplevel() if hasattr(self, "winfo_toplevel") else None
+            if hasattr(parent, "lift"):
+                try:
+                    parent.lift()
+                    parent.focus_force()
+                    parent.update_idletasks()
+                except Exception:
+                    pass
+            if parent is not None:
+                messagebox.showinfo("未找到匹配结果", content, parent=parent)
+            else:
+                messagebox.showinfo("未找到匹配结果", content)
+        except Exception as ex:
+            logging.warning(f"显示无匹配结果提示失败: {ex}")
+
     def _display_failed_summary(self, failed_formulas, failed_details, failed_stats, partial_formulas=None):
         partial_formulas = partial_formulas or []
         if not failed_formulas and not partial_formulas:
@@ -1017,43 +1089,39 @@ class FormulaSearchPage(BasePage):
         poll_limit_count = failed_stats.get("poll_limit", 0) if isinstance(failed_stats, dict) else 0
         other_count = failed_stats.get("other", 0) if isinstance(failed_stats, dict) else 0
 
-        lines = [
-            "",
-            "==== 检索结果统计 ====",
-            f"部分成功: {len(partial_formulas)}",
-            f"超时: {timeout_count}",
-            f"空结果: {no_compounds_count}",
-            f"轮询超限: {poll_limit_count}",
-            f"其他: {other_count}",
-        ]
+        logging.info("==== 检索结果统计 ====")
+        logging.info(
+            "部分成功: %s | 超时: %s | 空结果: %s | 轮询超限: %s | 其他: %s",
+            len(partial_formulas),
+            timeout_count,
+            no_compounds_count,
+            poll_limit_count,
+            other_count,
+        )
 
         if partial_formulas:
-            lines.append("---- 部分成功明细 ----")
+            logging.warning("---- 部分成功明细 ----")
             for formula in partial_formulas:
                 detail = failed_details.get(formula, {}) if isinstance(failed_details, dict) else {}
                 batch_summary = detail.get("batch_summary", {}) if isinstance(detail, dict) else {}
                 missing_count = len(batch_summary.get("missing_cids", [])) if isinstance(batch_summary, dict) else 0
-                lines.append(f"{formula}: 已保留部分结果，待补拉 CID {missing_count} 个")
+                logging.warning("%s: 已保留部分结果，待补拉 CID %s 个", formula, missing_count)
 
         if failed_formulas:
-            lines.append("---- 失败明细 ----")
+            logging.warning("---- 失败明细 ----")
             for formula in failed_formulas:
                 detail = failed_details.get(formula, {}) if isinstance(failed_details, dict) else {}
                 category = detail.get("category", "other")
                 message = detail.get("message", "unknown")
                 friendly = self._friendly_failed_reason(category, message)
-                lines.append(f"{formula}: {friendly} ({category})")
-
-        self.result_text.config(state=tk.NORMAL)
-        self.result_text.insert(tk.END, "\n".join(lines) + "\n")
-        self.result_text.config(state=tk.DISABLED)
+                logging.warning("%s: %s (%s)", formula, friendly, category)
 
     def _render_structure_image(self, smiles, inchi=None):
         self._structure_photo = None
         self._structure_image_path = None
         if not self._ensure_rdkit_available():
             token = smiles or inchi or "N/A"
-            self.structure_image_label.config(text=f"结构标识: {token}\n(未安装 rdkit，无法绘制结构式)", image='')
+            self.structure_image_label.config(text=f"结构标识: {token}\n(当前环境缺少 rdkit，无法绘制结构式；请重新安装依赖或使用新版发布包)", image='')
             return
         try:
             from rdkit import Chem

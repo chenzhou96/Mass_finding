@@ -1,3 +1,4 @@
+import os
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from .base_page import BasePage
@@ -12,6 +13,7 @@ from ...config.path_config import PathManager
 import logging
 import json
 import tkinter.font as tkFont
+from pathlib import Path
 import re
 from functools import partial
 
@@ -266,6 +268,7 @@ class FormulaGenerationPage(BasePage):
             "Adduct", "M/Z", "DBR", "C", "H", "N", "O", "S", "P", "Si", "F", "Cl", "Br", "I", "B", "Se", "Mol Weight"
         ]
         self.element_filter_fields = {"C", "H", "N", "O", "S", "P", "Si", "F", "Cl", "Br", "I", "B", "Se"}
+        self.integer_filter_fields = set(self.element_filter_fields) | {"DBR"}
         self.filter_field_meta = self._build_filter_field_meta()
         self.filter_condition_rows = []
         self.active_filter_row = None
@@ -695,10 +698,12 @@ class FormulaGenerationPage(BasePage):
         row_data["second_value_entry"].pack_forget()
         row_data["second_value_spin"].pack_forget()
 
+        integer_fields = getattr(self, "integer_filter_fields", set(getattr(self, "element_filter_fields", set())) | {"DBR"})
+
         if field_name == "Adduct":
             row_data["value_combo"].configure(values=self._get_current_adduct_filter_options())
             row_data["value_combo"].pack(side=tk.LEFT, fill=tk.X, expand=True)
-        elif field_name in self.element_filter_fields:
+        elif field_name in integer_fields:
             row_data["value_spin"].pack(side=tk.LEFT, fill=tk.X, expand=True)
         else:
             row_data["value_entry"].pack(side=tk.LEFT, fill=tk.X, expand=True)
@@ -708,9 +713,10 @@ class FormulaGenerationPage(BasePage):
     def _on_filter_operator_change(self, row_data):
         operator = row_data["operator_var"].get().strip()
         field_name = row_data["field_var"].get().strip()
+        integer_fields = getattr(self, "integer_filter_fields", set(getattr(self, "element_filter_fields", set())) | {"DBR"})
         if operator == "区间":
             row_data["second_value_label"].pack(side=tk.LEFT, padx=(6, 6))
-            if field_name in self.element_filter_fields:
+            if field_name in integer_fields:
                 row_data["second_value_spin"].pack(side=tk.LEFT, fill=tk.X, expand=True)
             else:
                 row_data["second_value_entry"].pack(side=tk.LEFT, fill=tk.X, expand=True)
@@ -769,19 +775,23 @@ class FormulaGenerationPage(BasePage):
                 return False
 
         if field_meta.get("type") == "number":
+            parser = int if field_name in getattr(self, "integer_filter_fields", set()) else float
+            value_error = "请输入有效整数" if parser is int else "请输入有效数值"
+            upper_error = "区间上限需为整数" if parser is int else "区间上限需为数值"
+
             if value:
                 try:
-                    float(value)
+                    parser(value)
                 except ValueError:
-                    row_data["error_var"].set("请输入有效数值")
+                    row_data["error_var"].set(value_error)
                     return False
             if operator == "区间" and second_value:
                 try:
-                    float(second_value)
+                    parser(second_value)
                 except ValueError:
-                    row_data["error_var"].set("区间上限需为数值")
+                    row_data["error_var"].set(upper_error)
                     return False
-            if operator == "区间" and value and second_value and float(value) > float(second_value):
+            if operator == "区间" and value and second_value and parser(value) > parser(second_value):
                 row_data["error_var"].set("下限不能大于上限")
                 return False
 
@@ -953,10 +963,27 @@ class FormulaGenerationPage(BasePage):
             data={"status_text": "loading..."}
         )
 
-        file_path = filedialog.askopenfilename(
-            title="选择JSON文件",
-            filetypes=[("JSON文件", "*.json"), ("所有文件", "*.*")]
-        )
+        initial_dir = PathManager().get_formula_generation_cache_path()
+        initial_dir = Path(initial_dir).expanduser().resolve()
+        initial_dir.mkdir(parents=True, exist_ok=True)
+
+        original_cwd = Path.cwd()
+        try:
+            try:
+                os.chdir(initial_dir)
+            except OSError as ex:
+                logging.warning(f"切换导入目录失败，将仅使用默认目录参数: {ex}")
+
+            file_path = filedialog.askopenfilename(
+                title="选择JSON文件",
+                initialdir=str(initial_dir),
+                filetypes=[("JSON文件", "*.json"), ("所有文件", "*.*")]
+            )
+        finally:
+            try:
+                os.chdir(original_cwd)
+            except OSError as ex:
+                logging.warning(f"恢复工作目录失败: {ex}")
         if file_path:
             try:
                 with open(file_path, 'r', encoding='utf-8') as f:

@@ -2,15 +2,44 @@ from pathlib import Path
 import platform
 import os
 import logging
+import sys
 
-# 自动定位项目根目录（假设根目录包含run.py和.git）
+APP_NAME = 'MassFinding'
+
+def _is_frozen_app() -> bool:
+    return bool(getattr(sys, 'frozen', False))
+
+# 自动定位项目根目录（开发模式下假设根目录包含 run.py）
 def _find_project_root() -> Path:
+    if _is_frozen_app():
+        return Path(sys.executable).resolve().parent
+
     current_path = Path(__file__).resolve()
     while current_path != current_path.parent:
         if (current_path / 'run.py').exists():
             return current_path
         current_path = current_path.parent
-    raise RuntimeError("无法定位项目根目录")
+    raise RuntimeError('无法定位项目根目录')
+
+def _get_bundle_root() -> Path:
+    if _is_frozen_app():
+        frozen_bundle = getattr(sys, '_MEIPASS', None)
+        if frozen_bundle:
+            return Path(frozen_bundle).resolve()
+        return Path(sys.executable).resolve().parent
+    return _find_project_root()
+
+def _get_app_data_root() -> Path:
+    if not _is_frozen_app():
+        return _find_project_root()
+
+    system = platform.system()
+    if system == 'Windows':
+        base_dir = os.environ.get('LOCALAPPDATA') or os.environ.get('APPDATA')
+        if base_dir:
+            return Path(base_dir) / APP_NAME
+
+    return Path.home() / f'.{APP_NAME.lower()}'
 
 def _get_desktop_path() -> Path:
     system = platform.system()
@@ -70,20 +99,22 @@ def _safe_formula_path_name(formula: str) -> str:
 class PathManager:
     def __init__(self):
         self.root_dir = _find_project_root()
-        self.config_dir = self.root_dir / "package" / "config"
-        self.resource = self.root_dir / "package" / "resources"
-        self.chem_element_config_path = self.config_dir / "chem_element_config.json"
-        self.icns_path = self.resource / "icon.icns"
-        self.ico_path = self.resource / "icon.ico"
+        self.bundle_dir = _get_bundle_root()
+        self.app_data_dir = _get_app_data_root()
+        self.config_dir = self.bundle_dir / 'package' / 'config'
+        self.resource = self.bundle_dir / 'package' / 'resources'
+        self.chem_element_config_path = self.config_dir / 'chem_element_config.json'
+        self.icns_path = self.resource / 'icon.icns'
+        self.ico_path = self.resource / 'icon.ico'
 
         self.desktop_path = _get_desktop_path()
-        self.existing_formula_filename = "existing_formula.json"
-        self.raw_data_formula_filename = "raw_data_formula.json"
-        self.failed_formula_filename = "failed_formula.json"
-        self.partial_formula_filename = "partial_formula.json"
+        self.existing_formula_filename = 'existing_formula.json'
+        self.raw_data_formula_filename = 'raw_data_formula.json'
+        self.failed_formula_filename = 'failed_formula.json'
+        self.partial_formula_filename = 'partial_formula.json'
 
     def get_mass_finding_cache_path(self) -> Path:
-        self.mass_finding_cache_path = _get_cache_path(self.root_dir, 'mass_finding_cache')
+        self.mass_finding_cache_path = _get_cache_path(self.app_data_dir, 'mass_finding_cache')
         return self.mass_finding_cache_path
 
     def get_formula_generation_cache_path(self) -> Path:

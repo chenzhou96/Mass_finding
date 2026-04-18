@@ -1,0 +1,4 @@
+Pillow>=10.0.0
+pubchempy>=1.0.4
+rdkit>=2024.3.5
+pyinstaller>=6.0.0

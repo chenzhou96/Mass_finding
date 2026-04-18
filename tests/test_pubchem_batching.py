@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from package.service.formula_search_service import (
     SearchStatus,
     FormulaSearchResult,
+    FormulaSearchPubChem,
     SearchManager,
     _build_pubchem_compounds_from_cids,
     _load_latest_pubchem_raw_results,
@@ -226,6 +227,27 @@ class PubChemBatchingTests(unittest.TestCase):
 
             self.assertEqual(nested_payload["metadata"]["formula"], "C13H18O2")
             self.assertEqual(legacy_payload["metadata"]["formula"], "C2H7NO2")
+
+    def test_pubchem_no_compounds_stops_retries_early(self):
+        searcher = FormulaSearchPubChem(max_retries=3, retry_delay=2)
+        calls = []
+
+        def fake_try(formula, fast=False, timeout=30, poll_interval=2, poll_max_attempts=6):
+            calls.append((formula, fast))
+            return {
+                "cids": None,
+                "error": "no_compounds:formula_http_400",
+                "endpoint": "fastformula" if fast else "formula",
+            }
+
+        with patch("package.service.formula_search_service._try_pubchem_formula_search_rest", side_effect=fake_try), \
+             patch("package.service.formula_search_service.time.sleep") as sleep_mock:
+            result = searcher.get_compounds("C5HNO")
+
+        self.assertIsNone(result)
+        self.assertEqual(searcher.get_last_error()["category"], "no_compounds")
+        self.assertEqual(len(calls), 2)
+        sleep_mock.assert_not_called()
 
     def test_search_manager_emits_progress_callback_for_each_formula(self):
         payloads = {
