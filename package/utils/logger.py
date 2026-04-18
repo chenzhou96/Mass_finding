@@ -2,6 +2,7 @@ import logging
 import tkinter as tk
 import datetime
 import os
+from queue import Empty, Queue
 from ..config.AppUI_config import AppUIConfig
 from ..core.event import Event, EventPriority, EventType
 from ..config.path_config import PathManager
@@ -10,6 +11,9 @@ class Logger:
     def __init__(self, event_bus, text_widget=None):
         self.text_widget = text_widget
         self.event_bus = event_bus
+        self._pending_messages = Queue()
+        self._ui_poll_interval_ms = 80
+        self._ui_poll_job = None
         self._configure_logging()  # 配置文件处理器
 
         # 订阅日志事件
@@ -51,6 +55,7 @@ class Logger:
         self.text_widget = text_widget
         self._configure_text_tags()
         self.text_widget.config(state=tk.DISABLED)
+        self._ensure_ui_polling()
 
     def _configure_text_tags(self):
         if not self.text_widget:
@@ -59,9 +64,41 @@ class Logger:
         for tag_name, style in AppUIConfig.InteractiveZone.LoggerZone.TAG_STYLES.items():
             self.text_widget.tag_configure(tag_name, **style)
 
+    def _ensure_ui_polling(self):
+        if not self.text_widget or self._ui_poll_job is not None:
+            return
+        try:
+            self._ui_poll_job = self.text_widget.after(self._ui_poll_interval_ms, self._drain_pending_logs)
+        except Exception:
+            self._ui_poll_job = None
+
+    def _drain_pending_logs(self):
+        self._ui_poll_job = None
+        if not self.text_widget:
+            return
+
+        try:
+            if hasattr(self.text_widget, 'winfo_exists') and not self.text_widget.winfo_exists():
+                return
+        except Exception:
+            return
+
+        while True:
+            try:
+                payload = self._pending_messages.get_nowait()
+            except Empty:
+                break
+
+            try:
+                self._append_log(payload)
+            except Exception:
+                continue
+
+        self._ensure_ui_polling()
+
     def log_to_ui(self, event):
-        if self.text_widget and event.data:
-            self.text_widget.after(0, lambda payload=event.data: self._append_log(payload))
+        if event and event.data:
+            self._pending_messages.put(event.data)
 
     def _normalize_message(self, payload):
         if isinstance(payload, dict):
@@ -73,6 +110,9 @@ class Logger:
 
     def _append_log(self, payload):
         """在 Text 组件追加日志"""
+        if not self.text_widget:
+            return
+
         level, message = self._normalize_message(payload)
         tag_name = level if level in AppUIConfig.InteractiveZone.LoggerZone.TAG_STYLES else 'DEFAULT'
         formatted_message = f"{message.rstrip()}\n"

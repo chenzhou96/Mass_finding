@@ -13,6 +13,7 @@ from package.service.formula_search_service import (
     SearchManager,
     _build_pubchem_compounds_from_cids,
     _load_latest_pubchem_raw_results,
+    _normalize_pubchem_compound,
     _rank_compounds,
     _save_pubchem_raw_data,
 )
@@ -85,6 +86,20 @@ class PubChemBatchingTests(unittest.TestCase):
             result = _build_pubchem_compounds_from_cids([3672], chunk_size=10, per_batch_retries=1)
 
         self.assertEqual(result["compounds"][0]["synonyms"], ["Ibuprofen", "Advil", "DrugBank: DB01050"])
+
+    def test_extracts_cas_from_synonyms_into_normalized_compound(self):
+        normalized = _normalize_pubchem_compound({
+            "cid": 286947,
+            "title": "Carbonic acid-guanidine (1:1)",
+            "synonyms": [
+                "100224-74-6",
+                "124-46-9",
+                "Carbonic acid-guanidine (1:1)",
+            ],
+        })
+
+        self.assertEqual(normalized["cas_number"], "100224-74-6")
+        self.assertEqual(normalized["cas_numbers"], ["100224-74-6", "124-46-9"])
 
     def test_ranking_uses_title_fallback_when_synonyms_are_missing(self):
         compounds = [

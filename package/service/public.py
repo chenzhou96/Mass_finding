@@ -157,6 +157,8 @@ class JSONExporter_formulaSearch_PubChem:
                 data = {
                     "molecular_formula": molecular_formula,
                     "cid": self._get_value(compound, 'cid', ['CID']),
+                    "cas_number": self._get_value(compound, 'cas_number', ['cas_number', 'CAS']),
+                    "cas_numbers": self._get_value(compound, 'cas_numbers', ['cas_numbers'], []),
                     "iupac_name": self._get_value(compound, 'iupac_name', ['IUPACName']),
                     "title": self._get_value(compound, 'title', ['Title']),
                     "isomeric_smiles": self._get_value(compound, 'isomeric_smiles', ['IsomericSMILES']),

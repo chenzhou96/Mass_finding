@@ -1,6 +1,8 @@
 from collections import defaultdict
 from threading import Lock
 import logging
+import sys
+import traceback
 from ..config.AppUI_config import AppUIConfig
 from ..config.event_config import EventType, EventPriority
 
@@ -29,19 +31,25 @@ class EventBus:
         filter_func=None
     ):
         listener = EventListener(callback, priority, filter_func)
-        self._listeners[event_type].append(listener)
+        with self._lock:
+            self._listeners[event_type].append(listener)
 
     def publish(self, event):
         with self._lock:
-            listeners = self._listeners.get(event.event_type, [])
-            # 按优先级排序（高优先级优先）
-            listeners.sort(key=lambda l: l.priority, reverse=True)
-            for listener in listeners:
-                if listener.filter and not listener.filter(event):
-                    continue
-                try:
-                    listener.callback(event)
-                except Exception:
+            listeners = list(self._listeners.get(event.event_type, []))
+
+        # 按优先级排序（高优先级优先）
+        listeners.sort(key=lambda l: l.priority, reverse=True)
+        for listener in listeners:
+            if listener.filter and not listener.filter(event):
+                continue
+            try:
+                listener.callback(event)
+            except Exception:
+                if event.event_type == EventType.LOG_MESSAGE.value:
+                    print(f"事件 {event.event_type} 处理失败", file=sys.stderr)
+                    traceback.print_exc()
+                else:
                     logging.exception(f"事件 {event.event_type} 处理失败")
 
 class EventManager:

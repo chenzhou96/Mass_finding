@@ -1,6 +1,8 @@
 import json
+import logging
 import os
 import sys
+import threading
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -56,6 +58,34 @@ class _FakeWidget:
 
     def configure(self, **kwargs):
         self.configured.update(kwargs)
+
+
+class _FakeTextWidget:
+    def __init__(self):
+        self.main_thread_id = threading.get_ident()
+        self.messages = []
+        self.configured = {}
+
+    def tag_configure(self, *args, **kwargs):
+        return None
+
+    def config(self, **kwargs):
+        self.configured.update(kwargs)
+
+    def insert(self, *args, **kwargs):
+        if len(args) >= 2:
+            self.messages.append(args[1])
+
+    def see(self, *args, **kwargs):
+        return None
+
+    def after(self, delay, callback=None, *args):
+        if threading.get_ident() != self.main_thread_id:
+            raise RuntimeError("after called off main thread")
+        return None
+
+    def winfo_exists(self):
+        return True
 
 
 class UiBehaviorTests(unittest.TestCase):
@@ -133,6 +163,69 @@ class UiBehaviorTests(unittest.TestCase):
 
         ask_mock.assert_not_called()
         self.assertTrue(destroyed["called"])
+
+    def test_event_bus_publish_does_not_deadlock_when_log_listener_fails(self):
+        from package.config.event_config import EventPriority, EventType
+        from package.core.event import Event, EventBus
+        from package.utils.logger import EventLogHandler
+
+        class DummyEventManagerForLogging:
+            def __init__(self):
+                self.bus = EventBus()
+
+            def publish(self, event_type, data=None, priority=EventPriority.NORMAL):
+                priority_value = priority.value if hasattr(priority, "value") else priority
+                self.bus.publish(Event(event_type.value, data, priority_value))
+
+        event_mgr = DummyEventManagerForLogging()
+
+        def broken_listener(_event):
+            raise RuntimeError("boom")
+
+        event_mgr.bus.subscribe(EventType.LOG_MESSAGE.value, broken_listener)
+
+        root_logger = logging.getLogger()
+        old_handlers = list(root_logger.handlers)
+        old_level = root_logger.level
+        root_logger.handlers = [EventLogHandler(event_mgr)]
+        root_logger.setLevel(logging.INFO)
+
+        finished = threading.Event()
+
+        def emit_log():
+            logging.info("probe message")
+            finished.set()
+
+        try:
+            worker = threading.Thread(target=emit_log, daemon=True)
+            worker.start()
+            worker.join(timeout=1.0)
+            self.assertTrue(finished.is_set(), "logging event handling deadlocked")
+        finally:
+            root_logger.handlers = old_handlers
+            root_logger.setLevel(old_level)
+
+    def test_logger_log_to_ui_is_safe_from_worker_thread(self):
+        from package.core.event import EventBus
+        from package.utils.logger import Logger
+
+        logger = Logger(event_bus=EventBus())
+        logger.set_text_widget(_FakeTextWidget())
+
+        payload = SimpleNamespace(data={"level": "INFO", "message": "worker-thread log"})
+        failures = []
+
+        def call_log_to_ui():
+            try:
+                logger.log_to_ui(payload)
+            except Exception as ex:
+                failures.append(ex)
+
+        worker = threading.Thread(target=call_log_to_ui, daemon=True)
+        worker.start()
+        worker.join(timeout=1.0)
+
+        self.assertFalse(failures, f"log_to_ui should not raise from worker thread: {failures}")
 
     def test_rounded_button_numeric_height_uses_pixels(self):
         root = None
@@ -479,6 +572,40 @@ class UiBehaviorTests(unittest.TestCase):
 
         self.assertTrue(row["value_spin"].packed)
         self.assertFalse(row["value_entry"].packed)
+
+    def test_compound_info_displays_cas_between_cid_and_title(self):
+        page = FormulaSearchPage.__new__(FormulaSearchPage)
+        page.current_formula_results = [{
+            "cid": 702,
+            "title": "Ethanol",
+            "iupac_name": "ethanol",
+            "synonyms": ["64-17-5", "ethyl alcohol"],
+        }]
+
+        class FakeListbox:
+            def curselection(self):
+                return (0,)
+
+        class FakeText:
+            def __init__(self):
+                self.content = ""
+
+            def config(self, **kwargs):
+                return None
+
+            def delete(self, *args, **kwargs):
+                self.content = ""
+
+            def insert(self, _index, text):
+                self.content += text
+
+        page.compound_listbox = FakeListbox()
+        page.result_text = FakeText()
+        page._render_structure_image = lambda *args, **kwargs: None
+
+        FormulaSearchPage._on_compound_select(page)
+
+        self.assertIn("CID: 702\nCAS: 64-17-5\nTitle: Ethanol", page.result_text.content)
 
     def test_failed_summary_logs_instead_of_overwriting_compound_info_panel(self):
         page = FormulaSearchPage.__new__(FormulaSearchPage)

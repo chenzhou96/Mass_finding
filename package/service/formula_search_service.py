@@ -2,6 +2,7 @@ import json
 import logging
 import time
 import datetime
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -99,6 +100,8 @@ KNOWN_BIOACTIVE_NAME_MARKERS = (
     'LIDOCAINE', 'CAFFEINE', 'CHOLESTEROL', 'GLUCOSE'
 )
 
+CAS_PATTERN = re.compile(r'(?<!\d)\d{2,7}-\d{2}-\d(?!\d)')
+
 
 def _normalize_formula(formula: str) -> str:
     if not isinstance(formula, str):
@@ -121,7 +124,7 @@ def _compound_to_serializable(compound: Any) -> Dict[str, Any]:
     fields = [
         'cid', 'iupac_name', 'isomeric_smiles', 'canonical_smiles',
         'inchi', 'inchikey', 'molecular_weight', 'monoisotopic_mass',
-        'synonyms', 'record'
+        'synonyms', 'cas_number', 'cas_numbers', 'record'
     ]
     data: Dict[str, Any] = {}
     for field in fields:
@@ -330,6 +333,35 @@ def _normalize_synonyms(synonyms: Any) -> List[str]:
             continue
         output.append(name)
     return output
+
+
+def _extract_cas_numbers_from_text(value: Any) -> List[str]:
+    if not isinstance(value, str):
+        return []
+    return [match.group(0) for match in CAS_PATTERN.finditer(value)]
+
+
+def _extract_cas_numbers(src: Any, synonyms: Optional[List[str]] = None) -> List[str]:
+    cas_numbers: List[str] = []
+
+    def _append_unique(items: List[str]):
+        for item in items:
+            if item not in cas_numbers:
+                cas_numbers.append(item)
+
+    if isinstance(src, dict):
+        for key in ('cas_number', 'cas', 'CAS', 'cas_numbers', 'CASNumber', 'RegistryNumber', 'RN'):
+            raw_value = src.get(key)
+            if isinstance(raw_value, list):
+                for entry in raw_value:
+                    _append_unique(_extract_cas_numbers_from_text(entry))
+            else:
+                _append_unique(_extract_cas_numbers_from_text(raw_value))
+
+    for name in synonyms or []:
+        _append_unique(_extract_cas_numbers_from_text(name))
+
+    return cas_numbers
 
 
 def _get_safe_split_point(chunk_length: int, min_chunk_size: int) -> Optional[int]:
@@ -616,6 +648,8 @@ def _normalize_pubchem_compound(compound: Any) -> Dict[str, Any]:
         covalent_unit = _extract_record_count_value(src, 'covalent_unit')
 
     inchi_value = src.get('inchi', src.get('InChI'))
+    normalized_synonyms = _normalize_synonyms(src.get('synonyms', []))
+    cas_numbers = _extract_cas_numbers(src, normalized_synonyms)
 
     normalized = {
         'cid': _safe_int(src.get('cid', src.get('CID'))),
@@ -635,7 +669,9 @@ def _normalize_pubchem_compound(compound: Any) -> Dict[str, Any]:
         'heavy_atom_count': _safe_int(src.get('heavy_atom_count', src.get('HeavyAtomCount'))),
         'charge': _safe_int(src.get('charge', src.get('Charge'))),
         'title': src.get('title', src.get('Title')),
-        'synonyms': _normalize_synonyms(src.get('synonyms', [])),
+        'synonyms': normalized_synonyms,
+        'cas_number': cas_numbers[0] if cas_numbers else None,
+        'cas_numbers': cas_numbers,
         'isotope_atom_count': isotope_atom_count,
         'covalent_unit': covalent_unit,
     }

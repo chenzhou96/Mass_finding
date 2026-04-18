@@ -3,6 +3,7 @@ from tkinter import ttk, messagebox
 import json
 import logging
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from .base_page import BasePage
@@ -14,6 +15,9 @@ from ...config.path_config import PathManager
 from ...core.thread_pool import ThreadPool
 from ...service.formulaSearch import start_search, rerank_cached_compounds
 from ...service.cache_index_service import sync_formula_index_cache
+
+
+CAS_PATTERN = re.compile(r'(?<!\d)\d{2,7}-\d{2}-\d(?!\d)')
 
 
 class FormulaSearchPage(BasePage):
@@ -101,6 +105,33 @@ class FormulaSearchPage(BasePage):
             self._rdkit_ready = False
             logging.warning("未检测到 rdkit，右侧将只显示文本信息，不显示结构式图片。")
         return self._rdkit_ready
+
+    def _extract_cas_numbers_for_display(self, item):
+        if not isinstance(item, dict):
+            return []
+
+        cas_numbers = []
+
+        def _append_matches(value):
+            if isinstance(value, str):
+                for match in CAS_PATTERN.finditer(value):
+                    cas_code = match.group(0)
+                    if cas_code not in cas_numbers:
+                        cas_numbers.append(cas_code)
+
+        raw_cas_numbers = item.get("cas_numbers") or []
+        if isinstance(raw_cas_numbers, list):
+            for entry in raw_cas_numbers:
+                _append_matches(entry)
+
+        _append_matches(item.get("cas_number"))
+
+        synonyms = item.get("synonyms") or []
+        if isinstance(synonyms, list):
+            for synonym in synonyms:
+                _append_matches(synonym)
+
+        return cas_numbers
 
     def _read_formula_list(self, path):
         try:
@@ -1189,6 +1220,7 @@ class FormulaSearchPage(BasePage):
         score_breakdown = item.get("score_breakdown") or {}
         why_selected = item.get("why_selected") or []
         synonyms = item.get("synonyms") or []
+        cas_numbers = self._extract_cas_numbers_for_display(item)
         xlogp = item.get("xlogp")
         tpsa = item.get("tpsa")
         hbd = item.get("hbond_donor_count")
@@ -1201,6 +1233,11 @@ class FormulaSearchPage(BasePage):
         quality_score = score_breakdown.get("record_quality")
         prevalence_score = score_breakdown.get("prevalence")
         synonym_count = len(synonyms) if isinstance(synonyms, list) else 0
+        cas_text = "N/A"
+        if cas_numbers:
+            cas_text = " / ".join(cas_numbers[:3])
+            if len(cas_numbers) > 3:
+                cas_text += " ..."
 
         def _fmt_metric(value):
             return "N/A" if value is None else str(value)
@@ -1219,6 +1256,7 @@ class FormulaSearchPage(BasePage):
         lines.extend([
             "",
             f"CID: {cid}",
+            f"CAS: {cas_text}",
             f"Title: {title}",
             f"IUPAC Name: {iupac_name}",
             f"Synonym Count: {synonym_count}",
