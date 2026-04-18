@@ -1016,18 +1016,20 @@ class FormulaGenerationPage(BasePage):
         btn_frame = self.widget_factory.create_frame(self.left_content_frame)
         btn_frame.grid(row=4, column=0, sticky="ew", pady=(BaseConfig.PADDING_B, 0))
         for idx in range(2):
-            btn_frame.grid_columnconfigure(idx, weight=1)
-        for idx in range(2):
-            btn_frame.grid_rowconfigure(idx, weight=1)
+            btn_frame.grid_columnconfigure(idx, weight=1, uniform="formula_generation_actions")
+
+        common_button_kwargs = {
+            "cooldown": 3,
+            "width": 10,
+            "height": 34,
+            "hover_bg": BaseConfig.ACCENT_COLOR,
+        }
 
         btn_run = self.widget_factory.create_rounded_button(
             btn_frame,
             text="开始分析",
             command=self._run_analysis,
-            cooldown=3,
-            width="92",
-            height="34",
-            hover_bg=BaseConfig.ACCENT_COLOR,
+            **common_button_kwargs,
         )
         btn_run.grid(row=0, column=0, sticky="ew", padx=(0, BaseConfig.PADDING_A), pady=(0, BaseConfig.PADDING_A))
 
@@ -1035,10 +1037,7 @@ class FormulaGenerationPage(BasePage):
             btn_frame,
             text="导入文件",
             command=self._open_json_file,
-            cooldown=3,
-            width="92",
-            height="34",
-            hover_bg=BaseConfig.ACCENT_COLOR,
+            **common_button_kwargs,
         )
         btn_open.grid(row=0, column=1, sticky="ew", padx=(BaseConfig.PADDING_A, 0), pady=(0, BaseConfig.PADDING_A))
 
@@ -1046,10 +1045,7 @@ class FormulaGenerationPage(BasePage):
             btn_frame,
             text="刷新页面",
             command=self._refresh_page,
-            cooldown=3,
-            width="92",
-            height="34",
-            hover_bg=BaseConfig.ACCENT_COLOR,
+            **common_button_kwargs,
         )
         btn_refresh.grid(row=1, column=0, sticky="ew", padx=(0, BaseConfig.PADDING_A), pady=(BaseConfig.PADDING_A, 0))
 
@@ -1058,8 +1054,8 @@ class FormulaGenerationPage(BasePage):
             text="",
             command=lambda: None,
             cooldown=0,
-            width="92",
-            height="34",
+            width=10,
+            height=34,
             hover_bg=BaseConfig.PRIMARY_COLOR,
         )
         btn_placeholder.config(state=tk.DISABLED)
@@ -1105,11 +1101,6 @@ class FormulaGenerationPage(BasePage):
         )
 
     def _run_analysis(self):
-        self.event_mgr.publish(
-            EventType.STATUS_UPDATE, 
-            data={"status_text": "running..."}
-        )
-
         params = {
             "ms_mode": self.ms_mode.get(),
             "adduct_model": [k for k, v in self.adduct_vars.items() if v.get()],
@@ -1123,8 +1114,12 @@ class FormulaGenerationPage(BasePage):
         validator = DataValidator()
         if not validator.validate(params):
             logging.error("参数输入有误，请检查")
+            self.event_mgr.publish(
+                EventType.STATUS_UPDATE,
+                data={"status_text": "done"}
+            )
             return
-        
+
         elements = params["elements"]
         for k, v in elements.items():
             if v == "不限":
@@ -1133,8 +1128,19 @@ class FormulaGenerationPage(BasePage):
                 params['elements'][k] = int(v)
 
         logging.debug(f"参数: {params}")
+        self.event_mgr.publish(
+            EventType.STATUS_UPDATE,
+            data={"status_text": "running..."}
+        )
 
-        self.thread_pool.submit(self._run_analysis_background, params)
+        try:
+            self.thread_pool.submit(self._run_analysis_background, params)
+        except Exception as ex:
+            logging.error(f"提交分析任务失败: {ex}")
+            self.event_mgr.publish(
+                EventType.STATUS_UPDATE,
+                data={"status_text": "done"}
+            )
 
     def _run_analysis_background(self, params):
         try:

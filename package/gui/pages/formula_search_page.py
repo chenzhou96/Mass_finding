@@ -248,38 +248,50 @@ class FormulaSearchPage(BasePage):
 
         btn_frame = self.widget_factory.create_frame(self.left_frame)
         btn_frame.grid(row=2, column=0, columnspan=2, sticky="ew", pady=BaseConfig.PADDING_A)
-        btn_frame.grid_columnconfigure(0, weight=1)
-        btn_frame.grid_columnconfigure(1, weight=1)
+        for idx in range(2):
+            btn_frame.grid_columnconfigure(idx, weight=1, uniform="formula_search_actions")
+
+        common_button_kwargs = {
+            "width": 10,
+            "height": 34,
+            "hover_bg": BaseConfig.ACCENT_COLOR,
+        }
 
         self.search_button = self.widget_factory.create_rounded_button(
             btn_frame,
             text="开始搜索",
             command=self._run_search,
-            width="120",
-            height="34",
-            hover_bg=BaseConfig.ACCENT_COLOR,
+            **common_button_kwargs,
         )
-        self.search_button.grid(row=0, column=0, sticky="ew", padx=(0, BaseConfig.PADDING_B))
-
-        self.remedy_button = self.widget_factory.create_rounded_button(
-            btn_frame,
-            text="一键补救",
-            command=self._run_remedy_search,
-            width="120",
-            height="34",
-            hover_bg=BaseConfig.ACCENT_COLOR,
-        )
-        self.remedy_button.grid(row=1, column=0, sticky="ew", padx=(0, BaseConfig.PADDING_B), pady=(BaseConfig.PADDING_B, 0))
+        self.search_button.grid(row=0, column=0, sticky="ew", padx=(0, BaseConfig.PADDING_B), pady=(0, BaseConfig.PADDING_B))
 
         self.rebuild_raw_button = self.widget_factory.create_rounded_button(
             btn_frame,
             text="重建数据",
             command=self._rebuild_from_raw_only,
-            width="180",
-            height="34",
-            hover_bg=BaseConfig.ACCENT_COLOR,
+            **common_button_kwargs,
         )
-        self.rebuild_raw_button.grid(row=0, column=1, sticky="ew", padx=(BaseConfig.PADDING_B, 0))
+        self.rebuild_raw_button.grid(row=1, column=0, sticky="ew", padx=(0, BaseConfig.PADDING_B), pady=(BaseConfig.PADDING_B, 0))
+
+        self.remedy_button = self.widget_factory.create_rounded_button(
+            btn_frame,
+            text="一键补救",
+            command=self._run_remedy_search,
+            **common_button_kwargs,
+        )
+        self.remedy_button.grid(row=0, column=1, sticky="ew", padx=(BaseConfig.PADDING_B, 0), pady=(0, BaseConfig.PADDING_B))
+
+        self.placeholder_button = self.widget_factory.create_rounded_button(
+            btn_frame,
+            text="",
+            command=lambda: None,
+            cooldown=0,
+            width=10,
+            height=34,
+            hover_bg=BaseConfig.PRIMARY_COLOR,
+        )
+        self.placeholder_button.config(state=tk.DISABLED)
+        self.placeholder_button.grid(row=1, column=1, sticky="ew", padx=(BaseConfig.PADDING_B, 0), pady=(BaseConfig.PADDING_B, 0))
 
     def _setup_right_frame(self, labelname='分子式信息'):
         self.info_label = self.widget_factory.create_label(self.right_frame, text=labelname, **AppUIConfig.FunctionZone.FormulaSearchPage.right_label)
@@ -433,6 +445,90 @@ class FormulaSearchPage(BasePage):
         if removed:
             self._write_partial_formula_map(self.partial_formula_file_path, self.partial_formula_map)
 
+    def _sync_formula_index_state(self):
+        try:
+            indexes = sync_formula_index_cache(self.path_manager)
+            self.existing_formula_list = indexes.get('existing_formulas', [])
+            self.raw_data_formula_list = indexes.get('raw_data_formulas', [])
+        except Exception as ex:
+            logging.warning(f"同步缓存索引失败: {ex}")
+        finally:
+            self._write_formula_list(self.existing_formula_file_path, self.existing_formula_list)
+            self._write_formula_list(self.raw_data_formula_file_path, self.raw_data_formula_list)
+
+    def _delete_formula_search_cache(self, formula):
+        cache_file = self._cache_file_for_formula(formula)
+        if not cache_file.exists():
+            return False
+        try:
+            cache_file.unlink()
+            logging.info(f"已删除分子式缓存: {cache_file}")
+            return True
+        except Exception as ex:
+            logging.warning(f"删除分子式缓存失败({formula}): {ex}")
+            return False
+
+    def _refresh_formula_displays(self):
+        frame_list_pairs = [
+            (getattr(self, 'waiting_formula_frame', None), getattr(self, 'waiting_formula_list', [])),
+            (getattr(self, 'success_formula_frame', None), getattr(self, 'success_formula_list', [])),
+            (getattr(self, 'existing_formula_frame', None), getattr(self, 'existing_formula_list', [])),
+            (getattr(self, 'failed_formula_frame', None), getattr(self, 'failed_formula_list', [])),
+        ]
+        for frame, formula_list in frame_list_pairs:
+            if frame is not None:
+                self._update_formula_display(frame, formula_list)
+
+    def _schedule_search_progress_update(self, payload):
+        self.after(0, self._apply_search_progress_update, payload)
+
+    def _apply_search_progress_update(self, payload):
+        if not isinstance(payload, dict):
+            return
+        formula = payload.get("formula")
+        if not formula:
+            return
+
+        status = payload.get("status", "failed")
+        export_data = payload.get("data")
+        detail = payload.get("detail") if isinstance(payload.get("detail"), dict) else {}
+
+        self._remove_from_waiting_list([formula])
+
+        if status in ("success", "partial"):
+            if formula not in self.success_formula_list:
+                self.success_formula_list.append(formula)
+            if formula not in self.existing_formula_list:
+                self.existing_formula_list.append(formula)
+            self.failed_formula_list = [f for f in self.failed_formula_list if f != formula]
+            self.failed_reason_map.pop(formula, None)
+            if formula not in self.raw_data_formula_list and self.path_manager.has_pubchem_raw_cache(formula):
+                self.raw_data_formula_list.append(formula)
+            if status == "partial":
+                self.partial_formula_map[formula] = self._build_partial_formula_entry(detail)
+            else:
+                self.partial_formula_map.pop(formula, None)
+        else:
+            if formula not in self.failed_formula_list:
+                self.failed_formula_list.append(formula)
+            if detail:
+                self.failed_reason_map[formula] = detail
+            self.partial_formula_map.pop(formula, None)
+
+        self._write_formula_list(self.existing_formula_file_path, self.existing_formula_list)
+        self._write_formula_list(self.raw_data_formula_file_path, self.raw_data_formula_list)
+        self._write_formula_list(self.failed_formula_file_path, self.failed_formula_list)
+        self._write_partial_formula_map(self.partial_formula_file_path, self.partial_formula_map)
+        self._refresh_formula_displays()
+
+        if status == "partial":
+            self._display_failed_summary([], {formula: detail}, {"timeout": 0, "no_compounds": 0, "poll_limit": 0, "other": 0}, [formula])
+        elif status == "failed":
+            category = detail.get("category", "other")
+            failed_stats = {"timeout": 0, "no_compounds": 0, "poll_limit": 0, "other": 0}
+            failed_stats[category if category in failed_stats else "other"] += 1
+            self._display_failed_summary([formula], {formula: detail}, failed_stats, [])
+
     def _formula_dict_to_string(self, formula_dict):
         order = ['C', 'H', 'N', 'O', 'S', 'P', 'Si', 'F', 'Cl', 'Br', 'I', 'B', 'Se']
         parts = []
@@ -507,6 +603,8 @@ class FormulaSearchPage(BasePage):
         if line is not None:
             state['anchor'] = line
             self._select_text_range(state, line, line)
+            if state['area_name'] in ('本地已有分子式', '搜索成功分子式'):
+                self._show_formula_info_from_area(state)
         return "break"
 
     def _on_text_shift_click(self, event, state):
@@ -576,16 +674,28 @@ class FormulaSearchPage(BasePage):
         for idx in indices:
             if 0 <= idx < len(target_list):
                 target_list.pop(idx)
+
         target_frame = self._frame_name_by_area(state['area_name'])
-        if target_frame:
+        selected_formula_set = set(selected_formulas)
+        if target_frame in ('existing_formula_frame', 'success_formula_frame'):
+            for formula in selected_formulas:
+                self._delete_formula_search_cache(formula)
+                self.partial_formula_map.pop(formula, None)
+                self.failed_reason_map.pop(formula, None)
+            self.success_formula_list = [f for f in self.success_formula_list if f not in selected_formula_set]
+            self.failed_formula_list = [f for f in self.failed_formula_list if f not in selected_formula_set]
+            self._sync_formula_index_state()
+            self._cleanup_partial_formula_map()
+            self._write_partial_formula_map(self.partial_formula_file_path, self.partial_formula_map)
+            self._refresh_formula_displays()
+        elif target_frame == 'failed_formula_frame':
+            for formula in selected_formulas:
+                self.failed_reason_map.pop(formula, None)
+            self._write_formula_list(self.failed_formula_file_path, self.failed_formula_list)
+            self._update_formula_display(self.failed_formula_frame, self.failed_formula_list)
+        else:
             self._update_formula_display(getattr(self, target_frame), target_list)
-            if target_frame == 'existing_formula_frame':
-                for formula in selected_formulas:
-                    self.partial_formula_map.pop(formula, None)
-                self._write_formula_list(self.existing_formula_file_path, self.existing_formula_list)
-                self._write_partial_formula_map(self.partial_formula_file_path, self.partial_formula_map)
-            elif target_frame == 'failed_formula_frame':
-                self._write_formula_list(self.failed_formula_file_path, self.failed_formula_list)
+
         state['selected_indices'].clear()
         state['anchor'] = None
 
@@ -693,17 +803,16 @@ class FormulaSearchPage(BasePage):
         return mapping.get(area_name)
 
     def _run_search(self, target_formulas=None, raw_only=False):
-        self.event_mgr.publish(
-            EventType.STATUS_UPDATE, 
-            data={"status_text": "running..."}
-        )
-
         formula_list = list(target_formulas) if target_formulas is not None else list(self.waiting_formula_list)
         if not formula_list:
             logging.warning("当前没有待搜索的分子式")
             self.event_mgr.publish(EventType.STATUS_UPDATE, data={"status_text": "done"})
             return
 
+        self.event_mgr.publish(
+            EventType.STATUS_UPDATE,
+            data={"status_text": "running..."}
+        )
         self._set_action_buttons_enabled(False)
 
         params = {
@@ -713,7 +822,12 @@ class FormulaSearchPage(BasePage):
             "raw_only": raw_only,
         }
 
-        self.thread_pool.submit(self._run_search_background, params)
+        try:
+            self.thread_pool.submit(self._run_search_background, params)
+        except Exception as ex:
+            logging.error(f"提交搜索任务失败: {ex}")
+            self._set_action_buttons_enabled(True)
+            self.event_mgr.publish(EventType.STATUS_UPDATE, data={"status_text": "done"})
 
     def _run_remedy_search(self):
         remedy_targets = []
@@ -799,6 +913,19 @@ class FormulaSearchPage(BasePage):
                     else:
                         need_search_formulas.append(formula)
 
+            for formula, cached_data in local_hit_results.items():
+                local_status = 'partial' if formula in self.partial_formula_map else 'success'
+                local_detail = {
+                    "category": "partial",
+                    "message": "partial_cache_loaded",
+                } if local_status == 'partial' else {}
+                self._schedule_search_progress_update({
+                    "formula": formula,
+                    "status": local_status,
+                    "data": cached_data,
+                    "detail": local_detail,
+                })
+
             search_results = {"success": {}, "failed": []}
             if need_search_formulas:
                 search_results = start_search(
@@ -807,6 +934,7 @@ class FormulaSearchPage(BasePage):
                     params.get("ion_mode", "both"),
                     raw_only=raw_only,
                     strict_filter=bool(params.get("strict_filter", True)),
+                    progress_callback=self._schedule_search_progress_update,
                 )
 
             merged_success = {}
@@ -818,47 +946,12 @@ class FormulaSearchPage(BasePage):
             failed_details = search_results.get("failed_details", {}) if isinstance(search_results, dict) else {}
             failed_stats = search_results.get("failed_stats", {}) if isinstance(search_results, dict) else {}
 
-            if isinstance(failed_details, dict):
-                for formula in failed_formulas:
-                    detail = failed_details.get(formula)
-                    if isinstance(detail, dict):
-                        self.failed_reason_map[formula] = detail
-
-            for formula in merged_success.keys():
-                if formula not in self.success_formula_list:
-                    self.success_formula_list.append(formula)
-                if formula not in self.existing_formula_list:
-                    self.existing_formula_list.append(formula)
-                if formula in self.failed_formula_list:
-                    self.failed_formula_list = [f for f in self.failed_formula_list if f != formula]
-                self.failed_reason_map.pop(formula, None)
-                has_raw = self.path_manager.has_pubchem_raw_cache(formula)
-                if formula not in self.raw_data_formula_list and has_raw:
-                    self.raw_data_formula_list.append(formula)
-
-            for formula in failed_formulas:
-                if formula not in self.failed_formula_list:
-                    self.failed_formula_list.append(formula)
-
-            for formula in formula_list:
-                self.partial_formula_map.pop(formula, None)
-            if isinstance(partial_details, dict):
-                for formula, detail in partial_details.items():
-                    self.partial_formula_map[formula] = self._build_partial_formula_entry(detail)
-
             self._remove_from_waiting_list(formula_list)
-
-            self._write_formula_list(self.existing_formula_file_path, self.existing_formula_list)
-            self._write_formula_list(self.raw_data_formula_file_path, self.raw_data_formula_list)
-            self._write_formula_list(self.failed_formula_file_path, self.failed_formula_list)
-            self._write_partial_formula_map(self.partial_formula_file_path, self.partial_formula_map)
-
-            self.after(0, self._update_formula_display, self.waiting_formula_frame, self.waiting_formula_list)
-            self.after(0, self._update_formula_display, self.success_formula_frame, self.success_formula_list)
-            self.after(0, self._update_formula_display, self.existing_formula_frame, self.existing_formula_list)
-            self.after(0, self._update_formula_display, self.failed_formula_frame, self.failed_formula_list)
-            self.after(0, self._display_search_results, merged_success)
-            self.after(0, self._display_failed_summary, failed_formulas, failed_details, failed_stats, partial_formulas)
+            self.after(0, self._refresh_formula_displays)
+            if merged_success:
+                self.after(0, self._display_search_results, merged_success)
+            if failed_formulas or partial_formulas:
+                self.after(0, self._display_failed_summary, failed_formulas, failed_details, failed_stats, partial_formulas)
             self._log_search_results(local_hit_results, search_results)
         except Exception as e:
             logging.error(f"搜索失败: {e}")
@@ -1133,8 +1226,15 @@ class FormulaSearchPage(BasePage):
             self.formula_info_label.config(text="当前搜索没有成功结果，可在左侧选择本地已有分子式查看详情")
             return
 
-        first_formula = next(iter(merged_success.keys()))
-        self._show_formula_info(first_formula)
+        if self.current_display_formula:
+            return
+
+        if len(merged_success) == 1:
+            first_formula = next(iter(merged_success.keys()))
+            self._show_formula_info(first_formula)
+            return
+
+        self.formula_info_label.config(text=f"搜索完成，共成功 {len(merged_success)} 个分子式；请在左侧选择查看详情")
 
     def _is_strict_filtered_item(self, item):
         covalent_unit = item.get("covalent_unit")

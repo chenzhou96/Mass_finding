@@ -2,6 +2,18 @@ from ..config.widget_config import WidgetConfig
 from ..config.base_config import BaseConfig
 import tkinter as tk
 
+def _normalize_rounded_button_width(width):
+    if isinstance(width, int):
+        return width * 10 if width <= 30 else width
+    return int(width)
+
+
+def _normalize_rounded_button_height(height):
+    if isinstance(height, int):
+        return height * 28 if height <= 3 else height
+    return int(height)
+
+
 class RoundedButton(tk.Canvas):
     def __init__(self, parent, text, command=None, width=120, height=34, radius=18, bg=BaseConfig.PRIMARY_COLOR, fg='#ffffff', hover_bg=BaseConfig.SECONDARY_COLOR, font=None, cursor='hand2', **kwargs):
         bg_parent = parent.cget('bg') if hasattr(parent, 'cget') else BaseConfig.BACKGROUND
@@ -13,18 +25,27 @@ class RoundedButton(tk.Canvas):
         self._radius = radius
         self._font = font or (BaseConfig.FONT_STYLE, BaseConfig.FONT_SIZE)
         self._state = tk.NORMAL
+        self._last_drawn_size = None
         self._draw_button(text)
         self.bind('<ButtonRelease-1>', self._on_click)
-        self.bind('<Enter>', lambda e: self._update_fill(self._hover_bg))
+        self.bind('<Enter>', lambda e: self._update_fill(self._hover_bg if self._state == tk.NORMAL else self._bg))
         self.bind('<Leave>', lambda e: self._update_fill(self._bg))
+        self.bind('<Configure>', self._on_resize)
 
     def _draw_button(self, text):
         self._text = text
         self.delete('all')
-        width = int(self['width'])
-        height = int(self['height'])
+        width = max(int(self.winfo_width()), int(self['width']), 4)
+        height = max(int(self.winfo_height()), int(self['height']), 4)
+        self._last_drawn_size = (width, height)
         self._rect = self._create_rounded_rect(2, 2, width - 2, height - 2, self._radius, fill=self._bg, outline='')
         self._text_id = self.create_text(width / 2, height / 2, text=self._text, fill=self._fg, font=self._font)
+
+    def _on_resize(self, event):
+        width = max(int(event.width), 4)
+        height = max(int(event.height), 4)
+        if self._last_drawn_size != (width, height):
+            self._draw_button(self._text)
 
     def _create_rounded_rect(self, x1, y1, x2, y2, r, **kwargs):
         points = [
@@ -64,12 +85,12 @@ class RoundedButton(tk.Canvas):
             self.itemconfig(self._text_id, font=self._font)
         if 'width' in kwargs:
             width = kwargs.pop('width')
-            width_px = int(width) * 10 if isinstance(width, int) else int(width)
+            width_px = _normalize_rounded_button_width(width)
             super().config(width=width_px)
             self._draw_button(self._text)
         if 'height' in kwargs:
             height = kwargs.pop('height')
-            height_px = int(height) * 28 if isinstance(height, int) else int(height)
+            height_px = _normalize_rounded_button_height(height)
             super().config(height=height_px)
             self._draw_button(self._text)
         if 'state' in kwargs:
@@ -170,8 +191,8 @@ class WidgetFactory:
 
         width = button_style.pop('width', 14)
         height = button_style.pop('height', 1)
-        width_px = int(width) * 10 if isinstance(width, int) else int(width)
-        height_px = int(height) * 28 if isinstance(height, int) else int(height)
+        width_px = _normalize_rounded_button_width(width)
+        height_px = _normalize_rounded_button_height(height)
 
         button_command = command
         if cooldown is not None and command is not None:

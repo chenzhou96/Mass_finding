@@ -227,6 +227,57 @@ class PubChemBatchingTests(unittest.TestCase):
             self.assertEqual(nested_payload["metadata"]["formula"], "C13H18O2")
             self.assertEqual(legacy_payload["metadata"]["formula"], "C2H7NO2")
 
+    def test_search_manager_emits_progress_callback_for_each_formula(self):
+        payloads = {
+            "A": {"compounds": [{"cid": 1, "title": "A"}], "is_partial": False},
+            "B": {"compounds": [], "is_partial": False},
+        }
+        progress_calls = []
+
+        class CallbackSearcher:
+            def get_compounds(self, formula: str):
+                return payloads[formula]
+
+            def get_last_error(self):
+                return {"category": "no_compounds", "message": "empty"}
+
+        with patch("package.service.formula_search_service.ExporterFactory.get_exporter", return_value=DummyExporter()), \
+             patch("package.service.formula_search_service._save_pubchem_raw_data"), \
+             patch("package.service.formula_search_service._load_latest_pubchem_raw_results", return_value=None):
+            manager = SearchManager(
+                CallbackSearcher(),
+                "json_formulaSearch_PubChem",
+                progress_callback=lambda payload: progress_calls.append(payload),
+            )
+            results = manager.search_formula_list(["A", "B"])
+
+        self.assertEqual([item["formula"] for item in progress_calls], ["A", "B"])
+        self.assertEqual(progress_calls[0]["status"], "success")
+        self.assertEqual(progress_calls[1]["status"], "failed")
+        self.assertIn("A", results["success"])
+        self.assertIn("B", results["failed"])
+
+    def test_min_split_size_never_recurses_below_floor(self):
+        chunk_sizes = []
+
+        def fake_fetch(url, timeout=30, endpoint_label="unknown"):
+            cid_text = url.split('/cid/')[1].split('/')[0]
+            cid_values = [int(item) for item in cid_text.split(',') if item]
+            chunk_sizes.append(len(cid_values))
+            raise RuntimeError("simulated batch failure")
+
+        with patch("package.service.formula_search_service._fetch_pubchem_json", side_effect=fake_fetch):
+            result = _build_pubchem_compounds_from_cids(
+                list(range(1, 13)),
+                chunk_size=100,
+                per_batch_retries=1,
+                min_split_size=10,
+            )
+
+        self.assertEqual(result["compounds"], [])
+        self.assertTrue(chunk_sizes)
+        self.assertTrue(all(size >= 10 for size in chunk_sizes), chunk_sizes)
+
 
 if __name__ == "__main__":
     unittest.main()

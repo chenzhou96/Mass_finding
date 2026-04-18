@@ -42,9 +42,11 @@ class APP(tk.Tk):
 
     def _init_window(self):
         super().__init__()
+        self.current_status_text = "done"
         self.title(AppUIConfig.MainWindow.TITLE)
         self.geometry(AppUIConfig.MainWindow.WINDOW_SIZE)
         self.configure(bg=AppUIConfig.MainWindow.BG_COLOR)
+        self.protocol("WM_DELETE_WINDOW", self._on_close_request)
         self._set_icon()
 
     def _set_icon(self):
@@ -414,6 +416,27 @@ class APP(tk.Tk):
             self._on_add_formula,
             priority=EventPriority.NORMAL
         )
+        self.event_mgr.subscribe(
+            EventType.STATUS_UPDATE,
+            self._on_status_update,
+            priority=EventPriority.NORMAL
+        )
+
+    def _on_status_update(self, event):
+        data = event.data if isinstance(event.data, dict) else {}
+        self.current_status_text = data.get("status_text", "") or ""
+
+    def _on_close_request(self):
+        status_text = str(getattr(self, "current_status_text", "")).strip().lower()
+        is_running = status_text.startswith("running")
+        if is_running:
+            should_close = messagebox.askyesno(
+                "确认退出",
+                "当前任务仍在运行中，直接关闭可能中断处理。\n\n确认仍要退出吗？"
+            )
+            if not should_close:
+                return
+        self.destroy()
 
     def _setup_initial_page(self):
         initial_page = self.page_factory.get_page('Blank_Page')

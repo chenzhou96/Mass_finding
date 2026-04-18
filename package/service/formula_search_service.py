@@ -332,6 +332,21 @@ def _normalize_synonyms(synonyms: Any) -> List[str]:
     return output
 
 
+def _get_safe_split_point(chunk_length: int, min_chunk_size: int) -> Optional[int]:
+    try:
+        normalized_min = max(1, int(min_chunk_size or 1))
+    except (TypeError, ValueError):
+        normalized_min = 1
+
+    if chunk_length < max(2, normalized_min * 2):
+        return None
+
+    split_point = max(normalized_min, chunk_length // 2)
+    if chunk_length - split_point < normalized_min:
+        return None
+    return split_point
+
+
 def _estimate_prevalence_from_synonyms(synonyms: List[str]) -> float:
     if not synonyms:
         return 0.0
@@ -850,8 +865,8 @@ def _fetch_pubchem_synonym_map(
                 if attempt < retries:
                     time.sleep(min(6, attempt))
 
-        if len(cid_chunk) > smallest_chunk:
-            split_point = max(1, len(cid_chunk) // 2)
+        split_point = _get_safe_split_point(len(cid_chunk), smallest_chunk)
+        if split_point is not None:
             left_result = _request_chunk(cid_chunk[:split_point], batch_index, split_depth + 1)
             right_result = _request_chunk(cid_chunk[split_point:], batch_index, split_depth + 1)
             merged_map = dict(left_result.get('synonym_map', {}))
@@ -1037,8 +1052,8 @@ def _build_pubchem_compounds_from_cids(
                 if attempt < retries:
                     time.sleep(min(6, attempt))
 
-        if len(cid_chunk) > smallest_chunk:
-            split_point = max(1, len(cid_chunk) // 2)
+        split_point = _get_safe_split_point(len(cid_chunk), smallest_chunk)
+        if split_point is not None:
             logging.warning(
                 f"PubChem 属性批次 {batch_index}/{total_batches} 将拆分重试，原始大小 {len(cid_chunk)} -> {split_point}+{len(cid_chunk) - split_point}"
             )
@@ -1375,12 +1390,21 @@ class FormulaSearchPubChem(FormulaSearch):
 
 
 class SearchManager:
-    def __init__(self, searcher: FormulaSearch, exporter_name: str, ion_mode: str = 'both', raw_only: bool = False, strict_filter: bool = True):
+    def __init__(self, searcher: FormulaSearch, exporter_name: str, ion_mode: str = 'both', raw_only: bool = False, strict_filter: bool = True, progress_callback=None):
         self.searcher = searcher
         self.exporter_name = exporter_name
         self.ion_mode = ion_mode
         self.raw_only = raw_only
         self.strict_filter = strict_filter
+        self.progress_callback = progress_callback
+
+    def _emit_progress(self, payload: Dict[str, Any]) -> None:
+        if not callable(self.progress_callback):
+            return
+        try:
+            self.progress_callback(payload)
+        except Exception as ex:
+            logging.warning(f"搜索进度回调执行失败: {ex}")
 
     def search_formula_list(self, formula_list: List[str]) -> Dict[str, Any]:
         if not formula_list:
@@ -1407,6 +1431,9 @@ class SearchManager:
             raise ValueError(f"找不到导出器: {self.exporter_name}")
 
         for formula in formula_list:
+            progress_status = 'failed'
+            progress_data = None
+            progress_detail: Dict[str, Any] = {}
             try:
                 raw_cached_payload = None
                 raw_cached_compounds: List[Any] = []
@@ -1426,6 +1453,8 @@ class SearchManager:
                         ranked_compounds = _rank_compounds(raw_cached_compounds, ion_mode=self.ion_mode, strict_filter=self.strict_filter)
                         export_data = exporter.export((formula, ranked_compounds))
                         results["success"][formula] = export_data
+                        progress_status = 'success'
+                        progress_data = export_data
                         logging.info(f"分子式 {formula} 使用 PubChem 原始缓存重处理完成")
                         continue
 
@@ -1434,6 +1463,8 @@ class SearchManager:
                             ranked_compounds = _rank_compounds(raw_cached_compounds, ion_mode=self.ion_mode, strict_filter=self.strict_filter)
                             export_data = exporter.export((formula, ranked_compounds))
                             results["success"][formula] = export_data
+                            progress_status = 'success'
+                            progress_data = export_data
                             if raw_cache_status == 'partial':
                                 results["partial"][formula] = {
                                     "category": "partial",
@@ -1443,6 +1474,8 @@ class SearchManager:
                                 }
                                 results["failed_details"][formula] = results["partial"][formula]
                                 results["partial_stats"]["partial"] += 1
+                                progress_status = 'partial'
+                                progress_detail = results["partial"][formula]
                             logging.info(f"分子式 {formula} 在 raw_only 模式下重建完成，status={raw_cache_status}")
                             continue
 
@@ -1453,6 +1486,8 @@ class SearchManager:
                             "message": "raw_only_no_cache",
                         }
                         results["failed_stats"]["no_compounds"] += 1
+                        progress_status = 'failed'
+                        progress_detail = results["failed_details"][formula]
                         continue
 
                 search_payload = self.searcher.get_compounds(formula)
@@ -1475,6 +1510,8 @@ class SearchManager:
                     ranked_compounds = _rank_compounds(payload_compounds, ion_mode=self.ion_mode, strict_filter=self.strict_filter)
                     export_data = exporter.export((formula, ranked_compounds))
                     results["success"][formula] = export_data
+                    progress_status = 'success'
+                    progress_data = export_data
 
                     if payload_is_partial:
                         partial_detail = {
@@ -1486,6 +1523,8 @@ class SearchManager:
                         results["partial"][formula] = partial_detail
                         results["failed_details"][formula] = partial_detail
                         results["partial_stats"]["partial"] += 1
+                        progress_status = 'partial'
+                        progress_detail = partial_detail
                 else:
                     results["failed"].append(formula)
                     error_info = self.searcher.get_last_error() if hasattr(self.searcher, 'get_last_error') else {
@@ -1500,6 +1539,8 @@ class SearchManager:
                         "message": error_info.get('message', 'unknown'),
                     }
                     results["failed_stats"][category] += 1
+                    progress_status = 'failed'
+                    progress_detail = results["failed_details"][formula]
             except Exception as ex:
                 logging.error(f"处理化学式 {formula} 失败: {ex}", exc_info=True)
                 results["failed"].append(formula)
@@ -1508,6 +1549,15 @@ class SearchManager:
                     "message": str(ex),
                 }
                 results["failed_stats"]["other"] += 1
+                progress_status = 'failed'
+                progress_detail = results["failed_details"][formula]
+            finally:
+                self._emit_progress({
+                    "formula": formula,
+                    "status": progress_status,
+                    "data": progress_data,
+                    "detail": progress_detail,
+                })
 
         return results
 
@@ -1518,6 +1568,7 @@ def start_search(
     ion_mode: str = 'both',
     raw_only: bool = False,
     strict_filter: bool = True,
+    progress_callback=None,
 ) -> Dict[str, Any]:
     web_name_lower = web_name.lower()
     if 'pubchem' in web_name_lower:
@@ -1537,5 +1588,12 @@ def start_search(
     else:
         raise ValueError(f"未知的 web_name: {web_name}")
 
-    manager = SearchManager(searcher, exporter_name, ion_mode=ion_mode, raw_only=raw_only, strict_filter=strict_filter)
+    manager = SearchManager(
+        searcher,
+        exporter_name,
+        ion_mode=ion_mode,
+        raw_only=raw_only,
+        strict_filter=strict_filter,
+        progress_callback=progress_callback,
+    )
     return manager.search_formula_list(formula_list)
