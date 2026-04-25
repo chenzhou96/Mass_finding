@@ -298,6 +298,21 @@ class APP(tk.Tk):
 
         selected_indices = sorted(self.selected_bus_indices)
         selected_formulas = [self.formula_bus[i] for i in selected_indices]
+
+        sendable_formulas = list(selected_formulas)
+        try:
+            # 确保页面存在，避免事件无订阅者导致发送静默丢失。
+            formula_search_page = self.page_factory.get_page('Formula_Search_Page')
+            waiting_set = set(getattr(formula_search_page, 'waiting_formula_list', []))
+            existing_set = set(getattr(formula_search_page, 'existing_formula_list', []))
+            success_set = set(getattr(formula_search_page, 'success_formula_list', []))
+            sendable_formulas = [
+                formula for formula in selected_formulas
+                if formula not in waiting_set and formula not in existing_set and formula not in success_set
+            ]
+        except Exception as ex:
+            logging.warning(f"预检查待搜索分子式失败，将按原始列表发送: {ex}")
+
         self.event_mgr.publish(EventType.ADD_WAITING_FORMULA, data=selected_formulas, priority=EventPriority.NORMAL)
 
         for index in sorted(selected_indices, reverse=True):
@@ -308,7 +323,12 @@ class APP(tk.Tk):
         self._update_formula_display()
 
         logging.info(f"发送到待搜索分子式：{', '.join(selected_formulas)}")
-        messagebox.showinfo("发送成功", f"已发送 {len(selected_formulas)} 个分子式到待搜索队列")
+        if sendable_formulas:
+            blocked_count = len(selected_formulas) - len(sendable_formulas)
+            messagebox.showinfo(
+                "发送成功",
+                f"新增 {len(sendable_formulas)} 个，{blocked_count} 个已存在未加入"
+            )
 
     def _init_logger(self):
         """配置日志 UI 组件"""

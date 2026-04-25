@@ -1,6 +1,6 @@
 class BaseConfig:
     # 版本号
-    VERSION = '1.0.0'
+    VERSION = '1.1.0'
 
     # 窗口设置
     WINDOW_SIZE = '1440x880'

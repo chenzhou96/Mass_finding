@@ -1406,18 +1406,31 @@ class FormulaGenerationPage(BasePage):
         # 发送事件
         self.event_mgr.publish(EventType.ADD_FORMULA, data=formula_str, priority=EventPriority.NORMAL)
 
+    def _resolve_table_column_name(self, column_token):
+        if not column_token or not str(column_token).startswith("#"):
+            return ""
+
+        try:
+            display_index = int(str(column_token)[1:]) - 1
+        except ValueError:
+            return ""
+
+        display_columns = self.table["displaycolumns"]
+        if display_columns == "#all":
+            visible_columns = tuple(self.table["columns"])
+        else:
+            visible_columns = tuple(display_columns)
+
+        if not (0 <= display_index < len(visible_columns)):
+            return ""
+
+        return visible_columns[display_index]
+
     def _on_table_right_click(self, event):
         row_id = self.table.identify_row(event.y)
         column_token = self.table.identify_column(event.x)
-        column_name = ""
+        column_name = self._resolve_table_column_name(column_token)
         cell_value = ""
-        if column_token and column_token.startswith("#"):
-            try:
-                column_index = int(column_token[1:]) - 1
-                if 0 <= column_index < len(self.table["columns"]):
-                    column_name = self.table["columns"][column_index]
-            except ValueError:
-                column_name = ""
 
         if row_id:
             current_selection = set(self.table.selection())

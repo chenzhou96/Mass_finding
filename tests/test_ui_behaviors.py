@@ -88,7 +88,88 @@ class _FakeTextWidget:
         return True
 
 
+class _FakePopupMenu:
+    def __init__(self):
+        self.entries = {}
+
+    def entryconfigure(self, index, **kwargs):
+        current = self.entries.get(index, {})
+        current.update(kwargs)
+        self.entries[index] = current
+
+    def tk_popup(self, _x_root, _y_root):
+        return None
+
+    def grab_release(self):
+        return None
+
+
+class _FakeTreeviewForContextMenu:
+    def __init__(self):
+        self._columns = ("M/Z", "Adduct", "DBR", "Mol Weight")
+        self._displaycolumns = ("M/Z", "Adduct", "Mol Weight", "DBR")
+        self._selection = ()
+        self._focused = ""
+        self._row_values = {
+            "row-1": (100.0, "[M+H]+", 2.0, 99.1234),
+        }
+
+    def __getitem__(self, key):
+        if key == "columns":
+            return self._columns
+        if key == "displaycolumns":
+            return self._displaycolumns
+        raise KeyError(key)
+
+    def identify_row(self, _y):
+        return "row-1"
+
+    def identify_column(self, _x):
+        return "#3"
+
+    def selection(self):
+        return self._selection
+
+    def selection_set(self, row_id):
+        self._selection = (row_id,)
+
+    def focus(self, row_id):
+        self._focused = row_id
+
+    def item(self, row_id, option):
+        if option == "values":
+            return self._row_values[row_id]
+        raise KeyError(option)
+
+
+class _FakeEvent:
+    x = 10
+    y = 10
+    x_root = 100
+    y_root = 100
+
+
 class UiBehaviorTests(unittest.TestCase):
+    def test_formula_generation_resolves_table_column_by_displaycolumns(self):
+        page = FormulaGenerationPage.__new__(FormulaGenerationPage)
+        page.table = _FakeTreeviewForContextMenu()
+
+        self.assertEqual(page._resolve_table_column_name("#3"), "Mol Weight")
+
+    def test_formula_generation_right_click_context_uses_clicked_display_column(self):
+        page = FormulaGenerationPage.__new__(FormulaGenerationPage)
+        page.table = _FakeTreeviewForContextMenu()
+        page.table_popup_menu = _FakePopupMenu()
+        page.filter_fields_order = ["M/Z", "Adduct", "DBR", "Mol Weight"]
+        page._current_table_context = {"row_id": "", "column_name": "", "cell_value": ""}
+
+        result = FormulaGenerationPage._on_table_right_click(page, _FakeEvent())
+
+        self.assertEqual(result, "break")
+        self.assertEqual(page._current_table_context["column_name"], "Mol Weight")
+        self.assertEqual(page._current_table_context["cell_value"], "99.1234")
+        self.assertEqual(page.table_popup_menu.entries[0]["state"], "normal")
+
     def test_open_json_file_uses_formula_generation_cache_as_default_folder(self):
         expected_dir = Path("E:/Python/Mass_finding/mass_finding_cache/formula_generation_cache")
         page = FormulaGenerationPage.__new__(FormulaGenerationPage)
@@ -548,6 +629,64 @@ class UiBehaviorTests(unittest.TestCase):
         self.assertEqual(FormulaSearchPage._on_text_click(page, object(), waiting_state), "break")
         self.assertNotIn(("show", "待搜索分子式"), calls)
 
+    def test_add_formula_warns_and_highlights_existing_or_success_hits(self):
+        page = FormulaSearchPage.__new__(FormulaSearchPage)
+        page.waiting_formula_list = []
+        page.success_formula_list = ["C7H2N2OS"]
+        page.existing_formula_list = ["C7H2N2OS", "C8H10N4O2"]
+        page.failed_formula_list = []
+        page.highlighted_existing_formulas = set()
+        page.highlighted_success_formulas = set()
+        page.waiting_formula_frame = {"title": "待搜索分子式"}
+        page.existing_formula_frame = {"title": "本地已有分子式"}
+        page.success_formula_frame = {"title": "搜索成功分子式"}
+
+        update_calls = []
+        page._update_formula_display = lambda frame, formulas: update_calls.append((frame["title"], list(formulas)))
+        page.winfo_toplevel = lambda: "MAIN_WINDOW"
+
+        event = SimpleNamespace(data=["C7H2N2OS", "C8H10N4O2", "C9H8O4"])
+
+        with patch("package.gui.pages.formula_search_page.messagebox.showwarning") as warning_mock:
+            FormulaSearchPage._on_add_formula(page, event)
+
+        self.assertEqual(page.waiting_formula_list, ["C9H8O4"])
+        self.assertIn("C7H2N2OS", page.highlighted_existing_formulas)
+        self.assertIn("C8H10N4O2", page.highlighted_existing_formulas)
+        self.assertIn("C7H2N2OS", page.highlighted_success_formulas)
+        self.assertNotIn("C8H10N4O2", page.highlighted_success_formulas)
+        self.assertIn(("待搜索分子式", ["C9H8O4"]), update_calls)
+        self.assertIn(("本地已有分子式", ["C7H2N2OS", "C8H10N4O2"]), update_calls)
+        self.assertIn(("搜索成功分子式", ["C7H2N2OS"]), update_calls)
+        warning_mock.assert_called_once()
+
+    def test_click_existing_formula_clears_attention_highlight(self):
+        page = FormulaSearchPage.__new__(FormulaSearchPage)
+        page.highlighted_existing_formulas = {"C7H2N2OS"}
+        page.highlighted_success_formulas = set()
+        page.existing_formula_frame = {"title": "本地已有分子式"}
+        page.existing_formula_list = ["C7H2N2OS"]
+        page._get_text_line_at_event = lambda event, state: 0
+        page._get_formula_from_state_index = lambda state, idx: "C7H2N2OS"
+        page._select_text_range = lambda state, start, end: None
+        page._show_formula_info_from_area = lambda state: None
+
+        display_calls = []
+        page._update_formula_display = lambda frame, formulas: display_calls.append((frame["title"], list(formulas)))
+
+        state = {
+            "area_name": "本地已有分子式",
+            "selected_indices": set(),
+            "anchor": None,
+            "display_to_formula": ["C7H2N2OS"],
+        }
+
+        result = FormulaSearchPage._on_text_click(page, object(), state)
+
+        self.assertEqual(result, "break")
+        self.assertNotIn("C7H2N2OS", page.highlighted_existing_formulas)
+        self.assertIn(("本地已有分子式", ["C7H2N2OS"]), display_calls)
+
     def test_dbr_filter_uses_integer_spinbox_like_elements(self):
         page = FormulaGenerationPage.__new__(FormulaGenerationPage)
         page.filter_fields_order = ["Adduct", "M/Z", "DBR", "C"]
@@ -606,6 +745,70 @@ class UiBehaviorTests(unittest.TestCase):
         FormulaSearchPage._on_compound_select(page)
 
         self.assertIn("CID: 702\nCAS: 64-17-5\nTitle: Ethanol", page.result_text.content)
+
+    def test_send_selected_to_search_does_not_show_success_when_all_are_blocked(self):
+        app = APP.__new__(APP)
+        app.selected_bus_indices = {0}
+        app.formula_bus = ["C7H2N2OS"]
+        app.selection_anchor = 0
+        app._update_formula_display = lambda: None
+
+        class DummyEventManagerForSend:
+            def __init__(self):
+                self.calls = []
+
+            def publish(self, event_type, data=None, priority=None):
+                self.calls.append((event_type, data, priority))
+
+        class DummyPageFactoryForSend:
+            def get_page(self, _page_name):
+                return SimpleNamespace(
+                    waiting_formula_list=[],
+                    existing_formula_list=["C7H2N2OS"],
+                    success_formula_list=[],
+                )
+
+        app.event_mgr = DummyEventManagerForSend()
+        app.page_factory = DummyPageFactoryForSend()
+
+        with patch("package.gui.main_window.messagebox.showinfo") as info_mock:
+            APP._send_selected_to_search(app)
+
+        self.assertEqual(app.formula_bus, [])
+        self.assertEqual(len(app.event_mgr.calls), 1)
+        info_mock.assert_not_called()
+
+    def test_send_selected_to_search_shows_success_with_sendable_count(self):
+        app = APP.__new__(APP)
+        app.selected_bus_indices = {0, 1, 2}
+        app.formula_bus = ["C7H2N2OS", "C9H8O4", "C8H10N4O2"]
+        app.selection_anchor = 1
+        app._update_formula_display = lambda: None
+
+        class DummyEventManagerForSend:
+            def __init__(self):
+                self.calls = []
+
+            def publish(self, event_type, data=None, priority=None):
+                self.calls.append((event_type, data, priority))
+
+        class DummyPageFactoryForSend:
+            def get_page(self, _page_name):
+                return SimpleNamespace(
+                    waiting_formula_list=["C8H10N4O2"],
+                    existing_formula_list=["C7H2N2OS"],
+                    success_formula_list=[],
+                )
+
+        app.event_mgr = DummyEventManagerForSend()
+        app.page_factory = DummyPageFactoryForSend()
+
+        with patch("package.gui.main_window.messagebox.showinfo") as info_mock:
+            APP._send_selected_to_search(app)
+
+        self.assertEqual(app.formula_bus, [])
+        self.assertEqual(len(app.event_mgr.calls), 1)
+        info_mock.assert_called_once_with("发送成功", "新增 1 个，2 个已存在未加入")
 
     def test_failed_summary_logs_instead_of_overwriting_compound_info_panel(self):
         page = FormulaSearchPage.__new__(FormulaSearchPage)

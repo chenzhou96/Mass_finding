@@ -92,6 +92,8 @@ class FormulaSearchPage(BasePage):
         self.text_areas = {}
         self.current_display_formula = None
         self._pending_no_compounds_formulas = []
+        self.highlighted_existing_formulas = set()
+        self.highlighted_success_formulas = set()
 
     def _ensure_rdkit_available(self):
         if self._rdkit_checked:
@@ -423,14 +425,21 @@ class FormulaSearchPage(BasePage):
 
     def _update_formula_display(self, formula_type, formula_list):
         """根据列表内容更新文本框显示"""
+        highlighted_existing = getattr(self, "highlighted_existing_formulas", set())
+        highlighted_success = getattr(self, "highlighted_success_formulas", set())
         text_widget = formula_type["text"]
         text_widget.config(state=tk.NORMAL)
         text_widget.delete('1.0', tk.END)  # 清空原有内容
+        text_widget.tag_remove("attention_line", "1.0", tk.END)
         display_to_formula = []
-        for formula in formula_list:
+        for idx, formula in enumerate(formula_list):
             display_text = self._formula_display_text(formula_type['title'], formula)
             text_widget.insert(tk.END, f"{display_text}\n")
             display_to_formula.append(formula)
+            if formula_type['title'] == '本地已有分子式' and formula in highlighted_existing:
+                text_widget.tag_add("attention_line", f"{idx + 1}.0", f"{idx + 1}.end")
+            if formula_type['title'] == '搜索成功分子式' and formula in highlighted_success:
+                text_widget.tag_add("attention_line", f"{idx + 1}.0", f"{idx + 1}.end")
         current_area = self.text_areas.get(formula_type['title'])
         if current_area:
             current_area['selected_indices'].clear()
@@ -445,14 +454,30 @@ class FormulaSearchPage(BasePage):
             formulas = [formulas]
 
         added = False
+        existing_hits = []
+        success_hits = []
         for formula in formulas:
-            if formula and formula not in self.waiting_formula_list and formula not in self.success_formula_list:
+            if not formula:
+                continue
+            if formula in self.existing_formula_list and formula not in existing_hits:
+                existing_hits.append(formula)
+            if formula in self.success_formula_list and formula not in success_hits:
+                success_hits.append(formula)
+            if (
+                formula not in self.waiting_formula_list
+                and formula not in self.success_formula_list
+                and formula not in self.existing_formula_list
+            ):
                 self.waiting_formula_list.append(formula)
                 logging.info(f"已添加待搜索分子式: {formula}")
                 added = True
 
         if added:
             self._update_formula_display(self.waiting_formula_frame, self.waiting_formula_list)
+
+        if existing_hits or success_hits:
+            self._mark_existing_success_conflicts(existing_hits, success_hits)
+            self._show_existing_success_conflict_notice(existing_hits, success_hits)
 
     def _load_cached_formulas(self):
         try:
@@ -501,6 +526,12 @@ class FormulaSearchPage(BasePage):
             return False
 
     def _refresh_formula_displays(self):
+        if not hasattr(self, "highlighted_existing_formulas"):
+            self.highlighted_existing_formulas = set()
+        if not hasattr(self, "highlighted_success_formulas"):
+            self.highlighted_success_formulas = set()
+        self.highlighted_existing_formulas.intersection_update(self.existing_formula_list)
+        self.highlighted_success_formulas.intersection_update(self.success_formula_list)
         frame_list_pairs = [
             (getattr(self, 'waiting_formula_frame', None), getattr(self, 'waiting_formula_list', [])),
             (getattr(self, 'success_formula_frame', None), getattr(self, 'success_formula_list', [])),
@@ -584,6 +615,7 @@ class FormulaSearchPage(BasePage):
 
     def _initialize_selectable_text_area(self, widget, area_name):
         widget.tag_configure("selected_line", background="#d0e7ff")
+        widget.tag_configure("attention_line", background="#ffe7a3")
         state = {
             'widget': widget,
             'area_name': area_name,
@@ -641,6 +673,9 @@ class FormulaSearchPage(BasePage):
     def _on_text_click(self, event, state):
         line = self._get_text_line_at_event(event, state)
         if line is not None:
+            formula = self._get_formula_from_state_index(state, line)
+            if formula:
+                self._clear_formula_attention(state['area_name'], formula)
             state['anchor'] = line
             self._select_text_range(state, line, line)
             if state['area_name'] in ('本地已有分子式', '搜索成功分子式'):
@@ -675,11 +710,69 @@ class FormulaSearchPage(BasePage):
         line = self._get_text_line_at_event(event, state)
         if line is None:
             return "break"
+        formula = self._get_formula_from_state_index(state, line)
+        if formula:
+            self._clear_formula_attention(state['area_name'], formula)
         state['anchor'] = line
         self._select_text_range(state, line, line)
         if state['area_name'] in ('本地已有分子式', '搜索成功分子式'):
             self._show_formula_info_from_area(state)
         return "break"
+
+    def _mark_existing_success_conflicts(self, existing_hits, success_hits):
+        if not hasattr(self, "highlighted_existing_formulas"):
+            self.highlighted_existing_formulas = set()
+        if not hasattr(self, "highlighted_success_formulas"):
+            self.highlighted_success_formulas = set()
+        self.highlighted_existing_formulas.update(existing_hits)
+        self.highlighted_success_formulas.update(success_hits)
+        if getattr(self, 'existing_formula_frame', None) is not None:
+            self._update_formula_display(self.existing_formula_frame, self.existing_formula_list)
+        if getattr(self, 'success_formula_frame', None) is not None:
+            self._update_formula_display(self.success_formula_frame, self.success_formula_list)
+
+    def _show_existing_success_conflict_notice(self, existing_hits, success_hits):
+        lines = [
+            "以下分子式已存在，不会再次加入待搜索：",
+        ]
+        if existing_hits:
+            lines.append(f"本地已有分子式: {', '.join(existing_hits)}")
+        if success_hits:
+            lines.append(f"搜索成功分子式: {', '.join(success_hits)}")
+
+        content = "\n".join(lines)
+        try:
+            parent = self.winfo_toplevel() if hasattr(self, "winfo_toplevel") else None
+            if parent is not None:
+                messagebox.showwarning("已存在分子式提醒", content, parent=parent)
+            else:
+                messagebox.showwarning("已存在分子式提醒", content)
+        except Exception as ex:
+            logging.warning(f"显示已存在分子式提醒失败: {ex}")
+
+    def _clear_formula_attention(self, area_name, formula):
+        if not hasattr(self, "highlighted_existing_formulas"):
+            self.highlighted_existing_formulas = set()
+        if not hasattr(self, "highlighted_success_formulas"):
+            self.highlighted_success_formulas = set()
+        if area_name == '本地已有分子式':
+            target_set = self.highlighted_existing_formulas
+            target_frame = getattr(self, 'existing_formula_frame', None)
+            target_list = self.existing_formula_list
+        elif area_name == '搜索成功分子式':
+            target_set = self.highlighted_success_formulas
+            target_frame = getattr(self, 'success_formula_frame', None)
+            target_list = self.success_formula_list
+        else:
+            return False
+
+        if formula not in target_set:
+            return False
+
+        target_set.discard(formula)
+        if target_frame is not None:
+            self._update_formula_display(target_frame, target_list)
+        return True
 
     def _select_text_range(self, state, start_line, end_line):
         widget = state['widget']
