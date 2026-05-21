@@ -3,6 +3,7 @@ from ..gui.pages.formula_generation_page import FormulaGenerationPage
 from ..gui.pages.formula_search_page import FormulaSearchPage
 from ..gui.pages.blank_page import BlankPage
 from ..gui.pages.interface_page import InterfacePage
+from ..gui.pages.score_statistics_page import ScoreStatisticsPage
 
 class PageFactory:
     def __init__(self, root, event_mgr=None):
@@ -12,7 +13,7 @@ class PageFactory:
             'Blank_Page': BlankPage,
             'Formula_Generation_Page': FormulaGenerationPage,
             'Formula_Search_Page': FormulaSearchPage,
-            'Interface_1_Page': InterfacePage,  # 需要实现
+            'Interface_1_Page': ScoreStatisticsPage,  # 评分统计
             'Interface_2_Page': InterfacePage,  # 需要实现
             'Interface_3_Page': InterfacePage,  # 需要实现
             'Interface_4_Page': InterfacePage,  # 需要实现

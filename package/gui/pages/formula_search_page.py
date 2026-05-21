@@ -820,6 +820,7 @@ class FormulaSearchPage(BasePage):
             menu.add_command(label="发送到待搜索分子式", command=lambda s=state: self._send_selected_to_search_from_area(s))
         if area_name in ('本地已有分子式', '搜索成功分子式'):
             menu.add_command(label="查看分子式信息", command=lambda s=state: self._show_formula_info_from_area(s))
+            menu.add_command(label="发送到评分统计", command=lambda s=state: self._send_to_score_statistics(s))
         if area_name == '搜索失败分子式':
             menu.add_command(label="查看失败原因", command=lambda s=state: self._show_failed_reason_from_area(s))
         menu.add_separator()
@@ -1044,6 +1045,34 @@ class FormulaSearchPage(BasePage):
         self._update_formula_display(self.waiting_formula_frame, self.waiting_formula_list)
         state['selected_indices'].clear()
         state['anchor'] = None
+
+    def _send_to_score_statistics(self, state):
+        indices = sorted(state['selected_indices'])
+        if not indices:
+            messagebox.showwarning("发送失败", "请先选中分子式")
+            return
+        selected_formulas = []
+        for idx in indices:
+            formula = self._get_formula_from_state_index(state, idx)
+            if formula:
+                selected_formulas.append(formula)
+        if not selected_formulas:
+            return
+
+        app = self.winfo_toplevel()
+        app.page_factory.get_page("Interface_1_Page")
+        app.event_mgr.publish(
+            EventType.SCORE_STATISTICS,
+            data={"formulas": selected_formulas, "source": "formula_search"},
+            priority=EventPriority.HIGH,
+        )
+        app.event_mgr.publish(
+            EventType.PAGE_SWITCH,
+            data={"new_page": "Interface_1_Page"},
+            priority=EventPriority.NORMAL,
+        )
+        stats_page = app.page_factory.get_page("Interface_1_Page")
+        app.show_page(stats_page)
 
     def _search_selected_from_waiting(self, state):
         indices = sorted(state['selected_indices'])

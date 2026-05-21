@@ -9,6 +9,7 @@ class EventType(Enum):
     ANALYSIS_FAILURE = "analysis_failure"
     VALIDATION_ERROR = "validation_error"
     FILE_LOAD_FAILURE = "file_load_failure"
+    SCORE_STATISTICS = "score_statistics"
 
 class EventPriority(Enum):
     LOW = 0

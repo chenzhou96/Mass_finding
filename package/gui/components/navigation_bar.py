@@ -23,15 +23,18 @@ class NavigationBar(tk.Frame):
             )
         
         # 生成预留接口按钮
+        interface_names = {1: "评分统计"}
         interface_count = 6
         for i in range(1, interface_count + 1):
             name = f"Interface_{i}_Page"
-            text = f"预留接口{i}"
+            text = interface_names.get(i, f"预留接口{i}")
             self.buttons[name] = self._create_nav_button(text, name)
 
         # 布局按钮
         for button in self.buttons.values():
             button.pack(side=tk.LEFT, padx=5, pady=5)
+
+        self.event_mgr.subscribe(EventType.PAGE_SWITCH, self._on_page_switch, priority=EventPriority.NORMAL)
 
     def _create_nav_button(self, text, page_name):
         return self.widget_factory.create_rounded_button(
@@ -68,3 +71,15 @@ class NavigationBar(tk.Frame):
                 
         # 使用优化后的 Logger 记录日志
         logging.info(f"切换到页面: {page_name_chinese}")
+
+    def _on_page_switch(self, event):
+        page_name = event.data.get("new_page", "") if isinstance(event.data, dict) else ""
+        if not page_name:
+            return
+        for btn in self.buttons.values():
+            if btn.cget("state") == tk.NORMAL:
+                btn.config(**AppUIConfig.NavigationBar.button)
+        new_btn = self.buttons.get(page_name)
+        if new_btn:
+            new_btn.config(**AppUIConfig.NavigationBar.active_button)
+            self.active_button = new_btn

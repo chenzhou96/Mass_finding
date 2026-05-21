@@ -2,7 +2,12 @@
   "permissions": {
     "allow": [
       "Bash(python -c \"import ast; ast.parse\\(open\\('package/gui/pages/formula_search_page.py', encoding='utf-8'\\).read\\(\\)\\); print\\('Syntax OK'\\)\")",
-      "Bash(python -c \"from package.gui.pages.formula_search_page import FormulaSearchPage; print\\('Import OK'\\)\")"
+      "Bash(python -c \"from package.gui.pages.formula_search_page import FormulaSearchPage; print\\('Import OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('package/config/event_config.py', encoding='utf-8'\\).read\\(\\)\\); ast.parse\\(open\\('package/core/page_factory.py', encoding='utf-8'\\).read\\(\\)\\); ast.parse\\(open\\('package/gui/components/navigation_bar.py', encoding='utf-8'\\).read\\(\\)\\); ast.parse\\(open\\('package/gui/pages/formula_search_page.py', encoding='utf-8'\\).read\\(\\)\\); ast.parse\\(open\\('package/gui/pages/score_statistics_page.py', encoding='utf-8'\\).read\\(\\)\\); print\\('All files Syntax OK'\\)\")",
+      "Bash(python -c \"from package.gui.pages.score_statistics_page import ScoreStatisticsPage; print\\('ScoreStatisticsPage Import OK'\\)\")",
+      "Bash(python -c \"import ast; ast.parse\\(open\\('package/gui/pages/score_statistics_page.py', encoding='utf-8'\\).read\\(\\)\\); print\\('Syntax OK'\\)\")",
+      "Bash(python -c \"from package.gui.pages.score_statistics_page import ScoreStatisticsPage; print\\('Import OK'\\)\")",
+      "Bash(python -c ' *)"
     ]
   }
 }
