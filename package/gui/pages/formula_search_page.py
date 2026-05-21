@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import shutil
 from datetime import datetime
 from pathlib import Path
 from .base_page import BasePage
@@ -315,17 +316,16 @@ class FormulaSearchPage(BasePage):
         )
         self.remedy_button.grid(row=0, column=1, sticky="ew", padx=(BaseConfig.PADDING_B, 0), pady=(0, BaseConfig.PADDING_B))
 
-        self.placeholder_button = self.widget_factory.create_rounded_button(
+        self.clear_cache_button = self.widget_factory.create_rounded_button(
             btn_frame,
-            text="",
-            command=lambda: None,
+            text="清理缓存",
+            command=self._clear_all_cache,
             cooldown=0,
             width=10,
             height=34,
-            hover_bg=BaseConfig.PRIMARY_COLOR,
+            hover_bg=BaseConfig.ERROR_COLOR,
         )
-        self.placeholder_button.config(state=tk.DISABLED)
-        self.placeholder_button.grid(row=1, column=1, sticky="ew", padx=(BaseConfig.PADDING_B, 0), pady=(BaseConfig.PADDING_B, 0))
+        self.clear_cache_button.grid(row=1, column=1, sticky="ew", padx=(BaseConfig.PADDING_B, 0), pady=(BaseConfig.PADDING_B, 0))
 
     def _setup_right_frame(self, labelname='分子式信息'):
         self.info_label = self.widget_factory.create_label(self.right_frame, text=labelname, **AppUIConfig.FunctionZone.FormulaSearchPage.right_label)
@@ -524,6 +524,186 @@ class FormulaSearchPage(BasePage):
         except Exception as ex:
             logging.warning(f"删除分子式缓存失败({formula}): {ex}")
             return False
+
+    def _clear_all_cache(self):
+        retention_hours = self._show_clear_cache_options()
+        if retention_hours is None:
+            return
+
+        if retention_hours == -1:
+            cutoff = None
+            desc = "所有"
+        else:
+            cutoff = datetime.now().timestamp() - retention_hours * 3600
+            if retention_hours == 24:
+                desc = "24小时以前"
+            elif retention_hours == 72:
+                desc = "3天以前"
+            else:
+                desc = "7天以前"
+
+        answer = messagebox.askyesno(
+            "确认清理缓存",
+            f"确定要清理 {desc} 的缓存数据吗？\n\n"
+            "涉及内容：分子式搜索缓存、PubChem 原始数据、\n"
+            "生成导出数据、结构式预览图片、索引文件",
+            icon=messagebox.WARNING,
+        )
+        if not answer:
+            return
+
+        cache_dirs = [
+            self.path_manager.get_formula_search_cache_path(),
+            self.path_manager.get_pubchem_raw_cache_path(),
+            self.path_manager.get_formula_generation_cache_path(),
+            self.path_manager.get_structure_preview_cache_path(),
+            self.path_manager.get_initialization_cache_path(),
+        ]
+
+        errors = []
+        deleted_count = 0
+        for cache_dir in cache_dirs:
+            try:
+                if not cache_dir.exists():
+                    continue
+                for item in list(cache_dir.iterdir()):
+                    try:
+                        if not self._is_cache_item_expired(item, cutoff):
+                            continue
+                        if item.is_dir():
+                            shutil.rmtree(item)
+                        else:
+                            item.unlink()
+                        deleted_count += 1
+                    except Exception as e:
+                        errors.append(f"{item.name}: {e}")
+            except Exception as e:
+                errors.append(f"{cache_dir.name}: {e}")
+
+        self.existing_formula_list.clear()
+        self.raw_data_formula_list.clear()
+        self.failed_formula_list.clear()
+        self.waiting_formula_list.clear()
+        self.success_formula_list.clear()
+        self.failed_reason_map.clear()
+        self.partial_formula_map.clear()
+        self.highlighted_existing_formulas.clear()
+        self.highlighted_success_formulas.clear()
+        self._pending_no_compounds_formulas.clear()
+
+        self._sync_formula_index_state()
+        self._write_partial_formula_map(self.partial_formula_file_path, self.partial_formula_map)
+        self._write_formula_list(self.failed_formula_file_path, self.failed_formula_list)
+        self._refresh_formula_displays()
+
+        self.current_display_formula = None
+        self.current_formula_results.clear()
+        self.formula_info_label.config(text="请选择本地已有或搜索成功分子式查看详情")
+        self.compound_listbox.delete(0, tk.END)
+        self.result_text.config(state=tk.NORMAL)
+        self.result_text.delete("1.0", tk.END)
+        self.result_text.config(state=tk.DISABLED)
+        self.structure_image_label.config(image="", text="结构式预览区\n双击可用系统默认图片查看器打开")
+        self._structure_photo = None
+        self._structure_image_path = None
+
+        if errors:
+            logging.warning(f"清理缓存时出现部分错误: {errors}")
+            messagebox.showwarning(
+                "清理完成（部分失败）",
+                f"已清理 {deleted_count} 项，部分文件无法删除：\n{chr(10).join(errors[:5])}",
+            )
+        else:
+            logging.info(f"缓存清理完成，共删除 {deleted_count} 项")
+            messagebox.showinfo("清理完成", f"缓存清理完成，共删除 {deleted_count} 项。")
+
+    def _show_clear_cache_options(self):
+        dialog = tk.Toplevel(self)
+        dialog.title("清理缓存")
+        dialog.transient(self)
+        dialog.grab_set()
+        dialog.resizable(False, False)
+
+        var = tk.IntVar(value=168)
+
+        header = tk.Label(dialog, text="选择保留期限", font=("", 11, "bold"))
+        header.pack(padx=24, pady=(16, 8), anchor="w")
+
+        options = [
+            ("保留最近 24 小时", 24),
+            ("保留最近 3 天", 72),
+            ("保留最近 7 天", 168),
+            ("不保留（删除全部）", -1),
+        ]
+        for text, value in options:
+            tk.Radiobutton(
+                dialog, text=text, variable=var, value=value,
+                anchor="w", padx=12,
+            ).pack(padx=24, pady=3, anchor="w", fill="x")
+
+        note = tk.Label(
+            dialog,
+            text="超出保留期限的以下数据将被删除：\n"
+                 "  · 分子式搜索缓存\n"
+                 "  · PubChem 原始数据\n"
+                 "  · 生成导出数据\n"
+                 "  · 结构式预览图片\n"
+                 "  · 索引与状态文件",
+            fg=BaseConfig.ERROR_COLOR,
+            justify="left",
+        )
+        note.pack(padx=24, pady=(12, 0), anchor="w")
+
+        btn_frame = tk.Frame(dialog)
+        btn_frame.pack(pady=(12, 16))
+
+        result = {"retention": None}
+
+        def _confirm():
+            result["retention"] = var.get()
+            dialog.destroy()
+
+        def _cancel():
+            dialog.destroy()
+
+        tk.Button(btn_frame, text="确认", width=8, command=_confirm).pack(
+            side="left", padx=(0, 8)
+        )
+        tk.Button(btn_frame, text="取消", width=8, command=_cancel).pack(
+            side="left", padx=(8, 0)
+        )
+
+        dialog.update_idletasks()
+        pw = self.winfo_width()
+        ph = self.winfo_height()
+        dw = dialog.winfo_reqwidth()
+        dh = dialog.winfo_reqheight()
+        x = self.winfo_rootx() + (pw - dw) // 2
+        y = self.winfo_rooty() + (ph - dh) // 2
+        dialog.geometry(f"+{max(0, x)}+{max(0, y)}")
+
+        dialog.wait_window()
+        return result["retention"]
+
+    @staticmethod
+    def _get_newest_mtime(path):
+        if path.is_file():
+            return path.stat().st_mtime
+        newest = 0
+        try:
+            for f in path.rglob("*"):
+                if f.is_file():
+                    newest = max(newest, f.stat().st_mtime)
+        except (OSError, PermissionError):
+            pass
+        return newest
+
+    @classmethod
+    def _is_cache_item_expired(cls, item, cutoff):
+        if cutoff is None:
+            return True
+        newest = cls._get_newest_mtime(item)
+        return newest < cutoff
 
     def _refresh_formula_displays(self):
         if not hasattr(self, "highlighted_existing_formulas"):
