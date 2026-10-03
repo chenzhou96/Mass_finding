@@ -44,17 +44,17 @@ class ReleasePackagingTests(unittest.TestCase):
             fake_exe.write_text("", encoding="utf-8")
 
             bundle_dir = Path(temp_dir) / "bundle"
-            (bundle_dir / "package" / "config").mkdir(parents=True, exist_ok=True)
-            (bundle_dir / "package" / "resources").mkdir(parents=True, exist_ok=True)
+            (bundle_dir.resolve() / "package" / "config").mkdir(parents=True, exist_ok=True)
+            (bundle_dir.resolve() / "package" / "resources").mkdir(parents=True, exist_ok=True)
 
             with patch.object(sys, "frozen", True, create=True), \
                  patch.object(sys, "executable", str(fake_exe)), \
                  patch.object(sys, "_MEIPASS", str(bundle_dir), create=True):
                 manager = PathManager()
 
-            self.assertEqual(manager.root_dir, runtime_dir)
-            self.assertEqual(manager.config_dir, bundle_dir / "package" / "config")
-            self.assertEqual(manager.resource, bundle_dir / "package" / "resources")
+            self.assertEqual(manager.root_dir, runtime_dir.resolve())
+            self.assertEqual(manager.config_dir, bundle_dir.resolve() / "package" / "config")
+            self.assertEqual(manager.resource, bundle_dir.resolve() / "package" / "resources")
 
     def test_frozen_app_writes_cache_to_localappdata(self):
         with TemporaryDirectory() as temp_dir:
@@ -64,8 +64,8 @@ class ReleasePackagingTests(unittest.TestCase):
             fake_exe.write_text("", encoding="utf-8")
 
             bundle_dir = Path(temp_dir) / "bundle"
-            (bundle_dir / "package" / "config").mkdir(parents=True, exist_ok=True)
-            (bundle_dir / "package" / "resources").mkdir(parents=True, exist_ok=True)
+            (bundle_dir.resolve() / "package" / "config").mkdir(parents=True, exist_ok=True)
+            (bundle_dir.resolve() / "package" / "resources").mkdir(parents=True, exist_ok=True)
 
             local_appdata = Path(temp_dir) / "LocalAppData"
             local_appdata.mkdir(parents=True, exist_ok=True)
@@ -73,7 +73,9 @@ class ReleasePackagingTests(unittest.TestCase):
             with patch.object(sys, "frozen", True, create=True), \
                  patch.object(sys, "executable", str(fake_exe)), \
                  patch.object(sys, "_MEIPASS", str(bundle_dir), create=True), \
-                 patch.dict(os.environ, {"LOCALAPPDATA": str(local_appdata)}, clear=False):
+                 patch.dict(os.environ, {"LOCALAPPDATA": str(local_appdata), "USERPROFILE": str(Path(temp_dir))}, clear=False), \
+                 patch("package.config.path_config.platform.system", return_value="Windows"):
+
                 manager = PathManager()
                 cache_path = manager.get_mass_finding_cache_path()
 

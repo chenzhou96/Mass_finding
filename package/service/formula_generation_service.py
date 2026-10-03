@@ -1,14 +1,24 @@
-import concurrent.futures
-import logging
-import os
+"""Shared monoisotopic candidate engine; no structural identification is implied."""
+import math
 import time
-from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 
 from ..config.path_config import PathManager
-from ..service.public import ExporterFactory, ReadChemElementConfig
+from .public import ExporterFactory, ReadChemElementConfig
+
+ENGINE_VERSION = '2.0.0'
+MAX_NODES = 2_000_000
+MAX_RESULTS = 25_000
+
+
+class SearchLimitError(ValueError):
+    pass
+
+
+class SearchCancelled(ValueError):
+    pass
 
 
 @dataclass
@@ -20,232 +30,198 @@ class FormulaCandidate:
     predicted_mw: float = 0.0
 
     def validate_valency(self) -> bool:
-        valency_1 = sum(self.formula.get(e, 0) for e in self.element_categories['valency_1'])
-        valency_3 = sum(self.formula.get(e, 0) for e in self.element_categories['valency_3'])
-        valency_4 = sum(self.formula.get(e, 0) for e in self.element_categories['valency_4'])
-
-        self.dbr = (2 * valency_4 + 2 + valency_3 - valency_1) / 2
-        if self.dbr < 0:
-            return False
-
+        v1 = sum(self.formula.get(e, 0) for e in self.element_categories['valency_1'])
+        v3 = sum(self.formula.get(e, 0) for e in self.element_categories['valency_3'])
+        v4 = sum(self.formula.get(e, 0) for e in self.element_categories['valency_4'])
+        self.dbr = (2 * v4 + 2 + v3 - v1) / 2
         self.predicted_mw = self.calculate_molecular_weight()
-        return ((self.dbr * 2) % 2) == 0
+        return self.dbr >= 0 and self.dbr.is_integer()
 
     def calculate_molecular_weight(self) -> float:
-        return sum(self.atomic_weights.get(element, 0.0) * count for element, count in self.formula.items())
+        return math.fsum(self.atomic_weights[e] * n for e, n in self.formula.items())
 
-    def to_dict(self) -> Dict[str, object]:
-        return {
-            'formula': {k: v for k, v in self.formula.items() if v != 0},
-            'dbr': self.dbr,
-            'predicted_mw': self.predicted_mw,
-        }
+    def to_dict(self):
+        return {'formula': {e: n for e, n in self.formula.items() if n},
+                'dbr': self.dbr, 'predicted_mw': self.predicted_mw}
 
-    def to_formula_string(self) -> str:
-        parts = []
-        ordered = ['C', 'H', 'N', 'O', 'S', 'P', 'Si', 'F', 'Cl', 'Br', 'I', 'B', 'Se']
-        for atom in ordered:
-            count = self.formula.get(atom, 0)
-            if count == 1:
-                parts.append(atom)
-            elif count > 1:
-                parts.append(f'{atom}{count}')
-        return ''.join(parts)
+    def to_formula_string(self):
+        keys = ['C', 'H'] + sorted(e for e in self.formula if e not in ('C', 'H')) if self.formula.get('C') else sorted(self.formula)
+        return ''.join(e + (str(self.formula[e]) if self.formula[e] > 1 else '')
+                       for e in keys if self.formula.get(e, 0) > 0)
 
 
-def normalize_elements(elements: Dict[str, int], atomic_weights: Dict[str, float]) -> List[tuple]:
-    processed = {}
-    for element, count in elements.items():
-        if element not in atomic_weights:
-            logging.warning(f'元素 {element} 不在原子量表中，已忽略。')
-            continue
-        if count == 0:
-            continue
-        processed[element] = float('inf') if count == -1 else count
-
-    items = [(elem, atomic_weights[elem], max_count) for elem, max_count in processed.items() if elem != 'H']
-    items.sort(key=lambda x: x[1], reverse=True)
-    if 'H' in processed:
-        items.append(('H', atomic_weights['H'], processed['H']))
+def normalize_elements(elements, atomic_weights):
+    for e, count in elements.items():
+        if e not in atomic_weights or isinstance(count, bool) or not isinstance(count, int) or count < -1:
+            raise ValueError('元素上限必须是支持的元素及非负整数或 -1（不限）')
+    items = [(e, atomic_weights[e], math.inf if n == -1 else n) for e, n in elements.items() if e != 'H' and n != 0]
+    items.sort(key=lambda item: item[1], reverse=True)
+    if elements.get('H', 0) != 0:
+        items.append(('H', atomic_weights['H'], math.inf if elements['H'] == -1 else elements['H']))
     return items
 
 
-def backtrack_search(target_mw: float, tolerance_mw: float, elements_order: List[tuple], atomic_weights: Dict[str, float], element_categories: Dict[str, List[str]]) -> List[FormulaCandidate]:
-    mw_min = target_mw - tolerance_mw
-    mw_max = target_mw + tolerance_mw
-    h_weight = atomic_weights.get('H', 1.0)
-    results: List[FormulaCandidate] = []
+def backtrack_search(target_mw, tolerance_mw, elements_order, atomic_weights, element_categories,
+                     dbe_filter=True, cancel_event=None, max_nodes=MAX_NODES, max_results=MAX_RESULTS):
+    if not math.isfinite(target_mw) or target_mw <= 0 or not math.isfinite(tolerance_mw) or tolerance_mw < 0:
+        raise ValueError('质量与误差必须是有限有效数值')
+    low, high = target_mw - tolerance_mw, target_mw + tolerance_mw
+    # Several summation orders meet here. An ulp-scale guard retains mathematical
+    # closed endpoints without widening an instrument tolerance by a fixed Da.
+    guard = 16 * math.ulp(max(abs(low), abs(high), 1.0))
+    h_weight = atomic_weights['H']
+    h_max = next((n for e, _, n in elements_order if e == 'H'), 0)
+    non_h = [(e, w, n) for e, w, n in elements_order if e != 'H']
+    results, nodes = [], 0
 
-    h_max = next((count for elem, _, count in elements_order if elem == 'H'), float('inf'))
-    non_h_elements = [(elem, weight, max_count) for elem, weight, max_count in elements_order if elem != 'H']
-
-    def dfs(index: int, current_mw: float, current: Dict[str, int]):
-        if index >= len(non_h_elements):
-            min_h = int(max(0, (mw_min - current_mw) / h_weight))
-            if current_mw + min_h * h_weight < mw_min:
-                min_h += 1
-
-            max_h = int((mw_max - current_mw) / h_weight)
-            if h_max != float('inf'):
-                max_h = min(max_h, int(h_max))
-
-            if max_h < min_h:
-                return
-
-            for h_count in range(min_h, max_h + 1):
-                candidate = FormulaCandidate(
-                    formula={**current, 'H': h_count},
-                    atomic_weights=atomic_weights,
-                    element_categories=element_categories
-                )
-                if candidate.validate_valency() and mw_min <= candidate.predicted_mw <= mw_max:
+    def dfs(index, current_mw, current):
+        nonlocal nodes
+        nodes += 1
+        if cancel_event is not None and cancel_event.is_set():
+            raise SearchCancelled('分析已取消')
+        if nodes > max_nodes:
+            raise SearchLimitError('搜索空间超限；请收紧元素上限或误差窗口。未返回不完整候选。')
+        if index == len(non_h):
+            min_h = max(0, math.ceil((low - current_mw - guard) / h_weight))
+            max_h = min(math.floor((high - current_mw + guard) / h_weight), h_max)
+            for count in range(min_h, int(max_h) + 1):
+                candidate = FormulaCandidate({**current, 'H': count}, atomic_weights, element_categories)
+                passes = candidate.validate_valency()
+                if not any(candidate.formula.values()):
+                    continue
+                if (passes or not dbe_filter) and low - guard <= candidate.predicted_mw <= high + guard:
                     results.append(candidate)
+                    if len(results) > max_results:
+                        raise SearchLimitError('候选数量超限；请收紧元素上限或误差窗口。未返回截断结果。')
             return
-
-        elem, weight, max_count = non_h_elements[index]
-        remaining_budget = mw_max - current_mw
-        if remaining_budget < 0:
-            return
-
-        max_possible = int(remaining_budget / weight) if weight > 0 else 0
-        if max_count != float('inf'):
-            max_possible = min(max_possible, int(max_count))
-
-        for count in range(max_possible, -1, -1):
-            next_mw = current_mw + count * weight
-            if next_mw > mw_max:
-                continue
-            dfs(index + 1, next_mw, {**current, elem: count})
+        e, weight, limit = non_h[index]
+        maximum = min(math.floor((high - current_mw + guard) / weight), limit)
+        for count in range(int(maximum), -1, -1):
+            dfs(index + 1, current_mw + count * weight, {**current, e: count})
 
     dfs(0, 0.0, {})
     return results
 
 
+def validate_input(data, config=None):
+    if not isinstance(data, dict):
+        raise ValueError('输入须为参数对象')
+    config = config or ReadChemElementConfig(PathManager().chem_element_config_path).config
+    normalized = dict(data)
+    for key in ('m2z', 'error_pct', 'error_da'):
+        value = data.get(key, 0.0 if key == 'error_da' else None)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            raise ValueError(f'{key} 必须是有限数值')
+        normalized[key] = float(value)
+    if not 0 < normalized['m2z'] <= 3000:
+        raise ValueError('m/z 范围为 (0, 3000] Th')
+    if not 0 <= normalized['error_pct'] <= 1 or not 0 <= normalized['error_da'] <= 10:
+        raise ValueError('误差须非负：百分比最多 1%，绝对窗口最多 10 Th')
+    charge = data.get('charge')
+    if isinstance(charge, bool) or not isinstance(charge, int) or not 1 <= charge <= 10:
+        raise ValueError('电荷绝对值须为 1–10 的整数')
+    mode, adducts = data.get('ms_mode'), data.get('adduct_model')
+    if mode not in config['adducts'] or not isinstance(adducts, list) or not adducts:
+        raise ValueError('请选择有效离子模式与至少一个加合类型')
+    if any(not isinstance(a, str) or a not in config['adducts'][mode] for a in adducts):
+        raise ValueError('加合类型与离子模式不匹配')
+    if charge > 1 and (not mode.startswith('ESI') or any(a not in ('H+', 'H-') for a in adducts)):
+        raise ValueError('多电荷仅支持 [M+zH]z+ 或 [M−zH]z−；其余模型请选择单电荷')
+    elements = data.get('elements')
+    if not isinstance(elements, dict) or not elements:
+        raise ValueError('请选择至少一种元素')
+    normalize_elements(elements, config['atomic_weights'])
+    if not any(n != 0 for n in elements.values()):
+        raise ValueError('元素上限不能全为零')
+    if any(n > 1000 for n in elements.values()):
+        raise ValueError('元素上限最多 1000；-1 表示不限（受质量预算约束）')
+    if not isinstance(data.get('dbe_filter', True), bool):
+        raise ValueError('DBE筛选须为布尔值')
+    normalized['elements'] = dict(elements)
+    normalized['adduct_model'] = list(dict.fromkeys(adducts))
+    normalized['dbe_filter'] = data.get('dbe_filter', True)
+    return normalized
+
+
 class FormulaGenerator:
     def __init__(self, config_path: Optional[Path] = None):
-        config_path = config_path or PathManager().chem_element_config_path
-        self.config = ReadChemElementConfig(config_path).config
+        self.config = ReadChemElementConfig(config_path or PathManager().chem_element_config_path).config
         self.atomic_weights = self.config['atomic_weights']
         self.element_categories = self.config['element_categories']
         self.ion_weights = self.config['ion_weights']
         self.adducts = self.config['adducts']
 
-    def build_formula_results(self, m2z: float, error_pct: float, error_da: float, charge: int, ms_mode: str, selected_adducts: List[str], elements: Dict[str, int]) -> Dict[str, List[dict]]:
+    def build_formula_results(self, m2z, error_pct, error_da, charge, ms_mode, selected_adducts, elements,
+                              dbe_filter=True, cancel_event=None):
+        params = validate_input(dict(m2z=m2z, error_pct=error_pct, error_da=error_da, charge=charge,
+                                     ms_mode=ms_mode, adduct_model=selected_adducts, elements=elements,
+                                     dbe_filter=dbe_filter), self.config)
         order = normalize_elements(elements, self.atomic_weights)
-        pct_tolerance_mz = m2z * (max(error_pct, 0.0) / 100.0)
-        da_tolerance_mz = max(error_da, 0.0)
-        pct_tolerance_mw = pct_tolerance_mz * charge
-        da_tolerance_mw = da_tolerance_mz * charge
-        mw_tolerance = max(pct_tolerance_mw, da_tolerance_mw)
-
-        if mw_tolerance <= 0:
-            logging.warning('误差范围无效：error_pct 与 error_da 不能同时小于等于0。')
-            return {}
-
-        tolerance_source = 'error_pct(%)' if pct_tolerance_mw >= da_tolerance_mw else 'error_da(Da)'
-        logging.info(
-            '误差窗口计算：m/z=%.4f, charge=%d, %%窗口=±%.4f m/z(±%.4f MW), Da窗口=±%.4f m/z(±%.4f MW), 最终采用=%s, 最终窗口=±%.4f m/z(±%.4f MW)',
-            m2z,
-            charge,
-            pct_tolerance_mz,
-            pct_tolerance_mw,
-            da_tolerance_mz,
-            da_tolerance_mw,
-            tolerance_source,
-            mw_tolerance / charge,
-            mw_tolerance,
-        )
-
-        results: Dict[str, List[dict]] = {}
-
-        tasks = []
-        for adduct, ion_key in self.adducts.get(ms_mode, {}).items():
-            if adduct not in selected_adducts:
-                continue
-            ion_weight = self.ion_weights.get(ion_key, 0.0)
-            base_mw = (m2z - ion_weight) * charge
-            if base_mw <= 0:
-                continue
-            tasks.append((adduct, base_mw, ion_weight))
-
-        if not tasks:
-            return results
-
-        max_workers = max(1, os.cpu_count() // 2)
-        with ProcessPoolExecutor(max_workers=max_workers) as executor:
-            futures = {
-                executor.submit(backtrack_search, base_mw, mw_tolerance, order, self.atomic_weights, self.element_categories): (adduct, ion_weight)
-                for adduct, base_mw, ion_weight in tasks
-            }
-            for future in concurrent.futures.as_completed(futures):
-                adduct, ion_weight = futures[future]
-                try:
-                    candidates = future.result()
-                    if not candidates:
-                        continue
-                    results[adduct] = [
-                        {
-                            **candidate.to_dict(),
-                            'adduct_type': adduct,
-                            'calculated_properties': {
-                                'dbr': candidate.dbr,
-                                'predicted_mz': (candidate.predicted_mw + charge * ion_weight) / charge,
-                                'molecular_weight': candidate.predicted_mw,
-                            }
-                        }
-                        for candidate in candidates
-                    ]
-                except Exception as ex:
-                    logging.error(f'adduct {adduct} 计算失败: {ex}', exc_info=True)
+        tolerance = max(m2z * error_pct / 100, error_da) * charge
+        results = {}
+        for adduct in params['adduct_model']:
+            shift = self.ion_weights[self.adducts[ms_mode][adduct]]
+            target = (m2z - shift) * charge
+            if target <= 0 or target > 5000:
+                raise ValueError('换算中性质量须为 (0, 5000] Da；请核对模式、电荷和 m/z')
+            candidates = backtrack_search(target, tolerance, order, self.atomic_weights, self.element_categories,
+                                          dbe_filter, cancel_event)
+            rows = []
+            for candidate in candidates:
+                predicted = candidate.predicted_mw / charge + shift
+                rows.append({**candidate.to_dict(), 'adduct_type': adduct,
+                             'ion_model': ion_model(adduct, charge, ms_mode),
+                             'calculated_properties': {'dbr': candidate.dbr, 'predicted_mz': predicted,
+                                 'molecular_weight': candidate.predicted_mw,
+                                 'error_th': predicted - m2z, 'error_ppm': (predicted - m2z) / m2z * 1e6}})
+            rows.sort(key=lambda r: (abs(r['calculated_properties']['error_th']), str(r['formula'])))
+            results[adduct] = rows
+            if sum(len(group) for group in results.values()) > MAX_RESULTS:
+                raise SearchLimitError('所有加合模型合计候选超限；请收紧约束。未返回截断结果。')
         return results
 
 
-def start_analysis(input_data: Dict[str, Any]) -> Dict[str, Any]:
-    start_time = time.time()
+def ion_model(adduct, charge, mode):
+    if adduct in ('e+', 'e-'):
+        return '[M]+' if mode == 'EI+' else '[M]−'
+    if adduct == 'H-':
+        return '[M−H]−' if charge == 1 else f'[M−{charge}H]{charge}−'
+    label = adduct[:-1]
+    suffix = '+' if mode.endswith('+') else '−'
+    return f'[M+{label}]{suffix}' if charge == 1 else f'[M+{charge}{label}]{charge}{suffix}'
+
+
+def analyze(input_data, cancel_event=None):
+    start = time.monotonic()
+    generator = FormulaGenerator()
+    params = validate_input(input_data, generator.config)
+    groups = generator.build_formula_results(params['m2z'], params['error_pct'], params['error_da'], params['charge'],
+                                            params['ms_mode'], params['adduct_model'], params['elements'],
+                                            params['dbe_filter'], cancel_event)
+    rows = [row for group in groups.values() for row in group]
+    rows.sort(key=lambda r: abs(r['calculated_properties']['error_th']))
+    return {'status': 'success', 'input_params': params, 'results': rows,
+            'metadata': {'engine_version': ENGINE_VERSION, 'mass_table': generator.config.get('mass_table'),
+                         'mass_basis': 'monoisotopic', 'mz_unit': 'Th', 'neutral_mass_unit': 'Da',
+                         'tolerance_rule': 'max(percent, absolute); inclusive endpoints',
+                         'tolerance_th': max(params['m2z'] * params['error_pct'] / 100, params['error_da']),
+                         'elapsed_seconds': time.monotonic() - start, 'result_count': len(rows),
+                         'dbe_filter': params['dbe_filter'], 'identification': 'candidate_only'}}
+
+
+def start_analysis(input_data: Dict[str, Any], cancel_event=None):
+    """Legacy desktop adapter; explicit errors remain distinct from no matches."""
     try:
-        generator = FormulaGenerator()
-        ms_mode = input_data['ms_mode']
-        selected_adducts = input_data.get('adduct_model', [])
-        m2z = float(input_data['m2z'])
-        error_pct = float(input_data['error_pct'])
-        error_da = float(input_data.get('error_da', 0.0))
-        charge = int(input_data['charge'])
-        elements = input_data['elements']
-
-        if not selected_adducts:
-            logging.warning('未选择任何离子类型。')
-            return {
-                'input_params': {
-                    **input_data,
-                    'adduct_model': []
-                },
-                'results': []
-            }
-
-        result = {
-            'input_params': {
-                **input_data,
-                'adduct_model': selected_adducts
-            },
-            'formulas': generator.build_formula_results(m2z, error_pct, error_da, charge, ms_mode, selected_adducts, elements)
-        }
-
-        if result['formulas']:
-            json_exporter = ExporterFactory.get_exporter('json_formulaGeneration')
-            if json_exporter is None:
-                raise ValueError('未找到生成结果导出器')
-            data_to_save = json_exporter.export(result)
-            logging.info(f'分析完成，结果已保存。耗时 {time.time() - start_time:.2f} 秒')
-            return data_to_save
-
-        logging.warning('未找到符合条件的分子式')
-        return {
-            'input_params': result['input_params'],
-            'results': []
-        }
-    except Exception as ex:
-        logging.exception(f'分析失败: {ex}')
-        return {
-            'input_params': input_data,
-            'results': []
-        }
+        result = analyze(input_data, cancel_event)
+        if cancel_event is not None and cancel_event.is_set():
+            raise SearchCancelled('分析已取消')
+        if result['results']:
+            # Keep the existing cache schema and preserve all audit fields.
+            result['formulas'] = {}
+            for row in result['results']:
+                result['formulas'].setdefault(row['adduct_type'], []).append(row)
+            ExporterFactory.get_exporter('json_formulaGeneration').export(result)
+            result.pop('formulas')
+        return result
+    except Exception as exc:
+        return {'status': 'error', 'error': str(exc), 'input_params': input_data, 'results': []}

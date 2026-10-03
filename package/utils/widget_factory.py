@@ -38,8 +38,8 @@ class RoundedButton(tk.Canvas):
         width = max(int(self.winfo_width()), int(self['width']), 4)
         height = max(int(self.winfo_height()), int(self['height']), 4)
         self._last_drawn_size = (width, height)
-        self._rect = self._create_rounded_rect(2, 2, width - 2, height - 2, self._radius, fill=self._bg, outline='')
-        self._text_id = self.create_text(width / 2, height / 2, text=self._text, fill=self._fg, font=self._font)
+        self._rect = self._create_rounded_rect(2, 2, width - 2, height - 2, self._radius, fill="#dddddd" if self._state == tk.DISABLED else self._bg, outline='')
+        self._text_id = self.create_text(width / 2, height / 2, text=self._text, fill="#777777" if self._state == tk.DISABLED else self._fg, font=self._font)
 
     def _on_resize(self, event):
         width = max(int(event.width), 4)
@@ -65,7 +65,7 @@ class RoundedButton(tk.Canvas):
         return self.create_polygon(points, smooth=True, **kwargs)
 
     def _update_fill(self, color):
-        self.itemconfig(self._rect, fill=color)
+        self.itemconfig(self._rect, fill="#dddddd" if self._state == tk.DISABLED else color)
 
     def _on_click(self, event):
         if self._state != tk.NORMAL:
@@ -74,6 +74,9 @@ class RoundedButton(tk.Canvas):
             self._command()
 
     def config(self, **kwargs):
+        if 'text' in kwargs:
+            self._text = str(kwargs.pop('text'))
+            self.itemconfig(self._text_id, text=self._text)
         if 'bg' in kwargs:
             self._bg = kwargs.pop('bg')
             self._update_fill(self._bg)
@@ -95,6 +98,8 @@ class RoundedButton(tk.Canvas):
             self._draw_button(self._text)
         if 'state' in kwargs:
             self._state = kwargs.pop('state')
+            self._update_fill(self._bg)
+            self.itemconfig(self._text_id, fill="#777777" if self._state == tk.DISABLED else self._fg)
         if 'command' in kwargs:
             self._command = kwargs.pop('command')
 
@@ -104,7 +109,11 @@ class RoundedButton(tk.Canvas):
 
         super().config(**kwargs)
 
+    configure = config
+
     def cget(self, key):
+        if key == 'text':
+            return self._text
         if key == 'state':
             return self._state
         if key == 'bg':
@@ -195,16 +204,17 @@ class WidgetFactory:
         height_px = _normalize_rounded_button_height(height)
 
         button_command = command
-        if cooldown is not None and command is not None:
-            original_command = command
+        if cooldown and command is not None:
             duration = int(cooldown * 1000)
 
             def wrapped_command():
-                if getattr(parent, '_rounded_btn_cooldown', False):
+                if getattr(rounded_button, '_cooldown_active', False):
                     return
-                setattr(parent, '_rounded_btn_cooldown', True)
-                original_command()
-                parent.after(duration, lambda: setattr(parent, '_rounded_btn_cooldown', False))
+                rounded_button._cooldown_active = True
+                try:
+                    command()
+                finally:
+                    rounded_button.after(duration, lambda: setattr(rounded_button, '_cooldown_active', False))
 
             button_command = wrapped_command
 

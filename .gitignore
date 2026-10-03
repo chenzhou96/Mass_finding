@@ -14,3 +14,10 @@
 
 build/
 dist/
+.venv/
+node_modules/
+__pycache__/
+*.py[cod]
+test-results/
+playwright-report/
+E:/

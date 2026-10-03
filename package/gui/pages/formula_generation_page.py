@@ -1,4 +1,5 @@
-import os
+import math
+import threading
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 from .base_page import BasePage
@@ -22,6 +23,10 @@ class FormulaGenerationPage(BasePage):
     def __init__(self, parent, event_mgr):
         super().__init__(parent, event_mgr, title="Formula Generation")
         self._layout_ratio = (2, 5)
+        self._analysis_running = False
+        self._input_revision = 0
+        self._results_stale = False
+        self._raw_result = None
         self.event_mgr.publish(
             EventType.STATUS_UPDATE, 
             data={"status_text": "loading..."}
@@ -37,10 +42,12 @@ class FormulaGenerationPage(BasePage):
         self.adduct_vars = {}  # 重置为字典存储当前选中的加合物
 
         # 使用网格布局
-        self.grid_columnconfigure(0, weight=2)
-        self.grid_columnconfigure(1, weight=5)
+        self.grid_columnconfigure(0, weight=0)
+        self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
+        self.left_frame.grid_propagate(False)
+        self.right_frame.pack_propagate(False)
         self.left_frame.grid(row=0, column=0, sticky="nsew")
         self.right_frame.grid(row=0, column=1, sticky="nsew")
         self.bind("<Configure>", self._on_page_resize)
@@ -60,6 +67,8 @@ class FormulaGenerationPage(BasePage):
 
         # 初始化加合物选项
         self._on_ms_mode_change()
+        for var in [self.ms_mode, self.m2z, self.error_pct, self.error_da, self.charge, self.dbe_filter, *self.element_vars.values()]:
+            var.trace_add("write", self._on_analysis_input_changed)
 
         self.event_mgr.publish(
             EventType.STATUS_UPDATE, 
@@ -91,18 +100,18 @@ class FormulaGenerationPage(BasePage):
         self.left_canvas.itemconfigure(self.left_canvas_window, width=event.width)
 
     def _on_left_mousewheel(self, event):
-        self.left_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        self.left_canvas.yview_scroll((-1 if event.delta > 0 else 1) if abs(event.delta) < 120 else int(-event.delta / 120), "units")
 
     def _on_page_resize(self, event):
         left_ratio, right_ratio = self._layout_ratio
         total_ratio = left_ratio + right_ratio
-        if event.width <= 1 or total_ratio <= 0:
+        if event.widget is not self or event.width <= 1 or total_ratio <= 0:
             return
 
-        left_width = max(0, int(event.width * left_ratio / total_ratio))
+        left_width = max(276, min(320, int(event.width * left_ratio / total_ratio)))
         right_width = max(0, event.width - left_width)
         self.grid_columnconfigure(0, minsize=left_width)
-        self.grid_columnconfigure(1, minsize=right_width)
+        self.grid_columnconfigure(1, minsize=0)
 
     def _get_adduct_config(self):
         if not self.adducts_config:
@@ -146,13 +155,14 @@ class FormulaGenerationPage(BasePage):
         for idx, adduct in enumerate(adducts):
             row = idx // cols
             col = idx % cols
-            var = tk.BooleanVar()
+            var = tk.BooleanVar(value=(idx == 0))
             cb = self.widget_factory.create_checkbutton(
                 self.adduct_frame, 
                 text=adduct, 
                 variable=var,
             )
             cb.grid(row=row, column=col, sticky="w", padx=BaseConfig.PADDING_A, pady=BaseConfig.PADDING_A)
+            var.trace_add("write", self._on_analysis_input_changed)
             self.adduct_vars[adduct] = var
 
         self._refresh_adduct_filter_options()
@@ -197,31 +207,40 @@ class FormulaGenerationPage(BasePage):
         params_frame.columnconfigure(1, weight=1)
 
         # 第一行：m/z值、电荷数
-        m2z_frame = create_grid_input_frame(params_frame, "m/z值", 0, 0)
+        m2z_frame = create_grid_input_frame(params_frame, "m/z (Th)", 0, 0)
         self.m2z = tk.DoubleVar(value=100)
         entry = self.widget_factory.create_entry(m2z_frame, textvariable=self.m2z, **AppUIConfig.FunctionZone.FormulaGenerationPage.input_entry)
-        entry.pack(**AppUIConfig.FunctionZone.FormulaGenerationPage.padding)
+        entry.pack(fill=tk.X, **AppUIConfig.FunctionZone.FormulaGenerationPage.padding)
 
-        charge_frame = create_grid_input_frame(params_frame, "电荷数", 0, 1)
+        charge_frame = create_grid_input_frame(params_frame, "电荷数 |z|", 0, 1)
         self.charge = tk.IntVar(value=1)
         entry = self.widget_factory.create_entry(charge_frame, textvariable=self.charge, **AppUIConfig.FunctionZone.FormulaGenerationPage.input_entry)
-        entry.pack(**AppUIConfig.FunctionZone.FormulaGenerationPage.padding)
+        entry.pack(fill=tk.X, **AppUIConfig.FunctionZone.FormulaGenerationPage.padding)
 
         # 第二行：误差范围（%）、误差范围（Da）
         error_frame = create_grid_input_frame(params_frame, "误差范围 (%)", 1, 0)
         self.error_pct = tk.DoubleVar(value=0.1)
         entry = self.widget_factory.create_entry(error_frame, textvariable=self.error_pct, **AppUIConfig.FunctionZone.FormulaGenerationPage.input_entry)
-        entry.pack(**AppUIConfig.FunctionZone.FormulaGenerationPage.padding)
+        entry.pack(fill=tk.X, **AppUIConfig.FunctionZone.FormulaGenerationPage.padding)
 
-        error_da_frame = create_grid_input_frame(params_frame, "误差范围 (Da)", 1, 1)
+        error_da_frame = create_grid_input_frame(params_frame, "绝对窗口 (Th)", 1, 1)
         self.error_da = tk.DoubleVar(value=0.0)
         entry = self.widget_factory.create_entry(error_da_frame, textvariable=self.error_da, **AppUIConfig.FunctionZone.FormulaGenerationPage.input_entry)
-        entry.pack(**AppUIConfig.FunctionZone.FormulaGenerationPage.padding)
+        entry.pack(fill=tk.X, **AppUIConfig.FunctionZone.FormulaGenerationPage.padding)
+
+        self.dbe_filter = tk.BooleanVar(value=True)
+        self.widget_factory.create_checkbutton(
+            params_frame, text="DBE 整数≥0筛选（价态启发）", variable=self.dbe_filter
+        ).grid(row=2, column=0, columnspan=2, sticky="w")
+        self.widget_factory.create_label(
+            params_frame, text="误差取较大值：% × m/z 或 Th", font=(BaseConfig.FONT_STYLE, BaseConfig.FONT_SIZE_SMALL),
+            fg=BaseConfig.TEXT_LIGHT, anchor="w"
+        ).grid(row=3, column=0, columnspan=2, sticky="ew")
 
         # 元素配置区优化
-        elements = ["C", "N", "O", "S", "P", "Si", "F", "Cl", "Br", "I", "B", "Se"]
+        elements = ["C", "H", "N", "O", "S", "P", "Si", "F", "Cl", "Br", "I", "B", "Se"]
         self.element_vars = {
-            e: tk.StringVar(value="不限" if e in {"C", "N", "O"} else "0") 
+            e: tk.StringVar(value="不限" if e in {"C", "H", "N", "O"} else "0")
             for e in elements
         }
 
@@ -232,7 +251,7 @@ class FormulaGenerationPage(BasePage):
         self.elements_frame.columnconfigure(2, weight=0)
         self.elements_frame.columnconfigure(3, weight=1)
 
-        element_options = ["不限"] + [str(i) for i in range(0, 13)]
+        element_options = ["不限"] + [str(i) for i in range(0, 13)] + ["16", "20", "32", "64", "100", "200", "500", "1000"]
         for i, elem in enumerate(elements):
             row, col_in_row = divmod(i, 2)
             label_col = col_in_row * 2
@@ -249,7 +268,7 @@ class FormulaGenerationPage(BasePage):
                 self.elements_frame,
                 textvariable=self.element_vars[elem],
                 values=element_options,
-                state='readonly',
+                state='normal',
                 width=8,
                 font=(BaseConfig.FONT_STYLE, BaseConfig.FONT_SIZE)
             )
@@ -261,7 +280,7 @@ class FormulaGenerationPage(BasePage):
         filter_frame.pack(side=tk.TOP, fill=tk.X)
 
         # 创建表格容器
-        table_frame = self.widget_factory.create_labelframe(self.right_frame, text="可能分子式")
+        table_frame = self.widget_factory.create_labelframe(self.right_frame, text="候选分子式（需结合实验复核）")
         table_frame.pack(side=tk.BOTTOM, fill=tk.BOTH, expand=True)
 
         self.filter_fields_order = [
@@ -948,7 +967,7 @@ class FormulaGenerationPage(BasePage):
             font = tkFont.Font()
             title_width = font.measure(col) + 20  # 标题宽度
             
-            # 计算内容最大宽度（已格式化为4位小数）
+            # 计算内容最大宽度（保留服务返回精度）
             content_width = max(
                 font.measure(str(item.get(col, ""))) 
                 for item in self.data
@@ -958,86 +977,62 @@ class FormulaGenerationPage(BasePage):
             self.table.column(col, width=new_width, minwidth=new_width, stretch=False)
 
     def _open_json_file(self):
-        self.event_mgr.publish(
-            EventType.STATUS_UPDATE, 
-            data={"status_text": "loading..."}
-        )
-
-        initial_dir = PathManager().get_formula_generation_cache_path()
-        initial_dir = Path(initial_dir).expanduser().resolve()
-        initial_dir.mkdir(parents=True, exist_ok=True)
-
-        original_cwd = Path.cwd()
+        if self.__dict__.get("_analysis_running", False):
+            return
+        self.event_mgr.publish(EventType.STATUS_UPDATE, data={"status_text": "loading..."})
         try:
-            try:
-                os.chdir(initial_dir)
-            except OSError as ex:
-                logging.warning(f"切换导入目录失败，将仅使用默认目录参数: {ex}")
-
+            initial_dir = Path(PathManager().get_formula_generation_cache_path()).expanduser().resolve()
+            initial_dir.mkdir(parents=True, exist_ok=True)
             file_path = filedialog.askopenfilename(
-                title="选择JSON文件",
-                initialdir=str(initial_dir),
+                title="选择候选分子式JSON文件", initialdir=str(initial_dir),
                 filetypes=[("JSON文件", "*.json"), ("所有文件", "*.*")]
             )
+            if not file_path:
+                return
+            with open(file_path, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+            if not isinstance(payload, dict) or not all(k in payload for k in ("metadata", "input_params", "results")):
+                raise ValueError("JSON必须包含 metadata、input_params、results")
+            if payload.get("status") == "error":
+                raise ValueError(payload.get("error", "文件记录了一次失败的分析"))
+            if not isinstance(payload["metadata"], dict) or not isinstance(payload["input_params"], dict) or not isinstance(payload["results"], list):
+                raise ValueError("metadata/input_params必须为对象，results必须为数组")
+            params = dict(payload["input_params"])
+            elements = params.get("elements")
+            if not isinstance(elements, dict):
+                raise ValueError("input_params.elements必须为对象")
+            params["elements"] = {k: "不限" if v == -1 else str(v) for k, v in elements.items()}
+            params["elements"].setdefault("H", "0" if payload["metadata"].get("engine_version") else "不限")
+            params.setdefault("error_da", 0.0)
+            if not DataValidator().validate(params):
+                raise ValueError("保存的输入参数无效或超出当前算法适用范围")
+            mapped = self._map_data(payload["results"])
+            if any(row.get("adduct_type") not in params["adduct_model"] for row in payload["results"]):
+                raise ValueError("候选加合物与文件输入不一致")
+            # Validate the entire document before replacing the previous view.
+            self.ms_mode.set(params["ms_mode"])
+            for name in ("m2z", "charge", "error_pct", "error_da"):
+                getattr(self, name).set(params[name])
+            self.dbe_filter.set(params.get("dbe_filter", True))
+            for element, var in self.element_vars.items():
+                var.set(params["elements"].get(element, "0"))
+            for adduct, var in self.adduct_vars.items():
+                var.set(adduct in params["adduct_model"])
+            self._raw_result = payload
+            self.data = mapped
+            self._results_stale = False
+            self._refresh_adduct_filter_options()
+            self._apply_filters()
+            self.auto_resize_columns()
+            self._update_hidden_columns()
+            if payload["metadata"].get("engine_version") != "2.0.0":
+                self.filter_feedback_label.configure(text="历史文件：保留原质量表结果，未以v2重算；重新分析可复核")
+            logging.info("文件导入成功，原始输入参数: %s", payload["input_params"])
+        except Exception as ex:
+            logging.error("文件导入失败，保留此前结果: %s", ex)
+            messagebox.showerror("文件导入失败", str(ex))
         finally:
-            try:
-                os.chdir(original_cwd)
-            except OSError as ex:
-                logging.warning(f"恢复工作目录失败: {ex}")
-        if file_path:
-            try:
-                with open(file_path, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                
-                required_keys = ["metadata", "input_params", "results"]
-                if not all(key in data for key in required_keys):
-                    raise ValueError("JSON文件缺少必要结构: {}".format(
-                        ", ".join([k for k in required_keys if k not in data])
-                    ))
-                
-                if not isinstance(data["results"], list):
-                    raise TypeError("results字段必须为数组类型")
-                
-                self.data = self._map_data(data["results"])
-                self._refresh_adduct_filter_options()
-                self._apply_filters()
-                self.auto_resize_columns()
-                self._update_hidden_columns()
-
-                # 分离不限和有限的元素
-                elements = data["input_params"]["elements"]
-                unlimited_elements = [elem for elem, count in elements.items() if count == -1]
-                limited_elements = [f"{elem}<={count}个" for elem, count in elements.items() if count > 0]
-
-                # 构建元素配置字符串
-                element_config_parts = []
-                if unlimited_elements:
-                    element_config_parts.append(f"{', '.join(unlimited_elements)}不限个数")
-                if limited_elements:
-                    element_config_parts.append(', '.join(limited_elements))
-
-                element_config_str = '; '.join(element_config_parts)
-
-                logging.info("文件导入成功，参数如下:")
-                logging.info(f"- 质谱模式: {data['input_params']['ms_mode']}")
-                logging.info(f"- 加合离子: {', '.join(data['input_params']['adduct_model'])}")
-                logging.info(f"- m/z: {data['input_params']['m2z']}")
-                logging.info(f"- 误差范围: ±{data['input_params']['error_pct']}%")
-                logging.info(f"- 误差范围: ±{data['input_params'].get('error_da', 0)} Da")
-                logging.info(f"- 电荷数: {data['input_params']['charge']}")
-                logging.info(f"- 元素配置: {element_config_str}")
-                
-            except json.JSONDecodeError as je:
-                logging.error(f"JSON解析失败: {str(je)}")
-            except (KeyError, ValueError, TypeError) as e:
-                logging.error(f"文件内容异常: {str(e)}")
-            except Exception as e:
-                logging.error(f"文件读取失败: {str(e)}")
-        
-        self.event_mgr.publish(
-            EventType.STATUS_UPDATE, 
-            data={"status_text": "done"}
-        )
+            self.event_mgr.publish(EventType.STATUS_UPDATE, data={"status_text": "done"})
 
     def _setup_buttons(self):
         btn_frame = self.widget_factory.create_frame(self.left_content_frame)
@@ -1052,43 +1047,47 @@ class FormulaGenerationPage(BasePage):
             "hover_bg": BaseConfig.ACCENT_COLOR,
         }
 
-        btn_run = self.widget_factory.create_rounded_button(
+        self.run_button = self.widget_factory.create_rounded_button(
             btn_frame,
             text="开始分析",
             command=self._run_analysis,
             **common_button_kwargs,
         )
-        btn_run.grid(row=0, column=0, sticky="ew", padx=(0, BaseConfig.PADDING_A), pady=(0, BaseConfig.PADDING_A))
+        self.run_button.grid(row=0, column=0, sticky="ew", padx=(0, BaseConfig.PADDING_A), pady=(0, BaseConfig.PADDING_A))
 
-        btn_open = self.widget_factory.create_rounded_button(
+        self.open_button = self.widget_factory.create_rounded_button(
             btn_frame,
             text="导入文件",
             command=self._open_json_file,
             **common_button_kwargs,
         )
-        btn_open.grid(row=0, column=1, sticky="ew", padx=(BaseConfig.PADDING_A, 0), pady=(0, BaseConfig.PADDING_A))
+        self.open_button.grid(row=0, column=1, sticky="ew", padx=(BaseConfig.PADDING_A, 0), pady=(0, BaseConfig.PADDING_A))
 
-        btn_refresh = self.widget_factory.create_rounded_button(
+        self.refresh_button = self.widget_factory.create_rounded_button(
             btn_frame,
             text="刷新页面",
             command=self._refresh_page,
             **common_button_kwargs,
         )
-        btn_refresh.grid(row=1, column=0, sticky="ew", padx=(0, BaseConfig.PADDING_A), pady=(BaseConfig.PADDING_A, 0))
+        self.refresh_button.grid(row=1, column=0, sticky="ew", padx=(0, BaseConfig.PADDING_A), pady=(BaseConfig.PADDING_A, 0))
 
-        btn_placeholder = self.widget_factory.create_rounded_button(
+        self.cancel_button = self.widget_factory.create_rounded_button(
             btn_frame,
-            text="",
-            command=lambda: None,
+            text="取消分析",
+            command=self._cancel_analysis,
             cooldown=0,
             width=10,
             height=34,
             hover_bg=BaseConfig.PRIMARY_COLOR,
         )
-        btn_placeholder.config(state=tk.DISABLED)
-        btn_placeholder.grid(row=1, column=1, sticky="ew", padx=(BaseConfig.PADDING_A, 0), pady=(BaseConfig.PADDING_A, 0))
+        self.cancel_button.config(state=tk.DISABLED)
+        self.cancel_button.grid(row=1, column=1, sticky="ew", padx=(BaseConfig.PADDING_A, 0), pady=(BaseConfig.PADDING_A, 0))
 
     def _refresh_page(self):
+        if self.__dict__.get("_analysis_running", False):
+            return
+        self._raw_result = None
+        self._results_stale = False
         self.event_mgr.publish(
             EventType.STATUS_UPDATE, 
             data={"status_text": "loading..."}
@@ -1100,10 +1099,11 @@ class FormulaGenerationPage(BasePage):
         self.error_pct.set(0.1)
         self.error_da.set(0.0)
         self.charge.set(1)
+        self.dbe_filter.set(True)
         
         # 2. 重置元素配置
         for elem in self.element_vars:
-            self.element_vars[elem].set("不限" if elem in {"C", "N", "O"} else "0")
+            self.element_vars[elem].set("不限" if elem in {"C", "H", "N", "O"} else "0")
         
         # 3. 重置加合物选项
         self.adduct_vars = {}
@@ -1127,68 +1127,121 @@ class FormulaGenerationPage(BasePage):
             data={"status_text": "done"}
         )
 
-    def _run_analysis(self):
-        params = {
-            "ms_mode": self.ms_mode.get(),
-            "adduct_model": [k for k, v in self.adduct_vars.items() if v.get()],
-            "m2z": self.m2z.get(),
-            "error_pct": self.error_pct.get(),
-            "error_da": self.error_da.get(),
-            "charge": self.charge.get(),
-            "elements": {k: v.get() for k, v in self.element_vars.items()}
-        }
+    def _on_analysis_input_changed(self, *_args):
+        self._input_revision = self.__dict__.get("_input_revision", 0) + 1
+        if self.__dict__.get("data", []):
+            self._results_stale = True
+            self.filter_feedback_label.configure(text="输入已更改；当前候选属于上次参数，请重新分析后再发送")
 
-        validator = DataValidator()
-        if not validator.validate(params):
-            logging.error("参数输入有误，请检查")
-            self.event_mgr.publish(
-                EventType.STATUS_UPDATE,
-                data={"status_text": "done"}
-            )
+    def _set_analysis_running(self, running):
+        self._analysis_running = running
+        for name in ("run_button", "open_button", "refresh_button"):
+            button = self.__dict__.get(name)
+            if button is not None:
+                button.configure(state=tk.DISABLED if running else tk.NORMAL)
+        cancel_button = self.__dict__.get("cancel_button")
+        if cancel_button is not None:
+            cancel_button.configure(state=tk.NORMAL if running else tk.DISABLED, text="取消分析")
+
+    def _cancel_analysis(self):
+        if not self.__dict__.get("_analysis_running", False):
             return
+        self._analysis_cancel_event.set()
+        self.cancel_button.configure(state=tk.DISABLED, text="正在取消…")
+        logging.info("已请求取消，等待计算线程退出")
 
-        elements = params["elements"]
-        for k, v in elements.items():
-            if v == "不限":
-                params['elements'][k] = -1
-            else:
-                params['elements'][k] = int(v)
-
-        logging.debug(f"参数: {params}")
-        self.event_mgr.publish(
-            EventType.STATUS_UPDATE,
-            data={"status_text": "running..."}
-        )
-
+    def _run_analysis(self):
+        if self.__dict__.get("_analysis_running", False):
+            return
         try:
-            self.thread_pool.submit(self._run_analysis_background, params)
+            params = {
+                "ms_mode": self.ms_mode.get(),
+                "adduct_model": [k for k, v in self.adduct_vars.items() if v.get()],
+                "m2z": self.m2z.get(),
+                "error_pct": self.error_pct.get(),
+                "error_da": self.error_da.get(),
+                "charge": self.charge.get(),
+                "elements": {k: v.get() for k, v in self.element_vars.items()},
+                "dbe_filter": self.dbe_filter.get()
+            }
+            if not DataValidator().validate(params):
+                raise ValueError("参数输入有误，请检查数值、离子模式、加合物与元素上限")
+            params["elements"] = {k: -1 if v == "不限" else int(v) for k, v in params["elements"].items()}
+        except (tk.TclError, ValueError, TypeError) as ex:
+            logging.error("参数输入有误: %s", ex)
+            messagebox.showerror("无法开始分析", str(ex))
+            self.event_mgr.publish(EventType.STATUS_UPDATE, data={"status_text": "done"})
+            return
+        logging.info("分析参数: %s", params)
+        self._analysis_cancel_event = threading.Event()
+        self._set_analysis_running(True)
+        self._submitted_revision = self.__dict__.get("_input_revision", 0)
+        self.event_mgr.publish(EventType.STATUS_UPDATE, data={"status_text": "running..."})
+        try:
+            self._analysis_future = self.thread_pool.submit(self._run_analysis_background, params)
+            self.after(75, self._poll_analysis_future)
         except Exception as ex:
-            logging.error(f"提交分析任务失败: {ex}")
-            self.event_mgr.publish(
-                EventType.STATUS_UPDATE,
-                data={"status_text": "done"}
-            )
+            self._set_analysis_running(False)
+            logging.error("提交分析任务失败: %s", ex)
+            messagebox.showerror("分析失败", str(ex))
+            self.event_mgr.publish(EventType.STATUS_UPDATE, data={"status_text": "done"})
 
     def _run_analysis_background(self, params):
+        # Worker code never touches Tk; the UI polls the Future on its own thread.
+        result = start_analysis(params, cancel_event=self.__dict__.get("_analysis_cancel_event"))
+        if not isinstance(result, dict) or result.get("status") == "error":
+            raise ValueError(result.get("error", "分析未返回有效结果") if isinstance(result, dict) else "分析未返回有效结果")
+        return result
+
+    def _poll_analysis_future(self):
+        if not self._analysis_future.done():
+            self.after(75, self._poll_analysis_future)
+            return
         try:
-            result = start_analysis(params)
-            self.data = self._map_data(result["results"])
-            self.after(0, self._refresh_adduct_filter_options)
-            self.after(0, self._apply_filters)
-            self.after(0, self.auto_resize_columns)
-            self.after(0, self._update_hidden_columns)
-        except Exception as e:
-            logging.error(f"分析失败: {e}")
+            cancelled = self.__dict__.get("_analysis_cancel_event")
+            if cancelled is not None and cancelled.is_set():
+                logging.info("分析已取消，此前候选与输入追溯保留")
+                return
+            result = self._analysis_future.result()
+            mapped = self._map_data(result["results"])
+            self._raw_result = result
+            self.data = mapped
+            self._results_stale = self._submitted_revision != self._input_revision
+            self._refresh_adduct_filter_options()
+            self._apply_filters()
+            self.auto_resize_columns()
+            self._update_hidden_columns()
+            if self._results_stale:
+                self.filter_feedback_label.configure(text="计算期间输入已更改；结果属于任务开始时参数，请重新分析后再发送")
+        except Exception as ex:
+            logging.error("分析失败: %s", ex)
+            messagebox.showerror("分析失败", str(ex))
         finally:
-            self.after(0, self.event_mgr.publish, EventType.STATUS_UPDATE, {"status_text": "done"})
+            self._set_analysis_running(False)
+            self.event_mgr.publish(EventType.STATUS_UPDATE, data={"status_text": "done"})
 
     def _map_data(self, raw_data):
         mapped = []
+        if not isinstance(raw_data, list):
+            raise ValueError("候选结果必须为数组")
         for item in raw_data:
-            formula_data = item.get("formula", item.get("elements", {})) or {}
+            if not isinstance(item, dict):
+                raise ValueError("候选记录必须为对象")
+            formula_data = item.get("formula", item.get("elements"))
+            properties = item.get("calculated_properties")
+            if not isinstance(formula_data, dict) or not isinstance(properties, dict) or not isinstance(item.get("adduct_type"), str):
+                raise ValueError("候选记录缺少分子式、质量属性或加合物信息")
+            if not formula_data or any(e not in {"C","H","N","O","S","P","Si","F","Cl","Br","I","B","Se"} for e in formula_data):
+                raise ValueError("候选分子式包含未知元素或为空")
+            for key in ("predicted_mz", "molecular_weight", "dbr"):
+                value = properties.get(key)
+                if value is None or isinstance(value, bool) or not math.isfinite(float(value)):
+                    raise ValueError(f"候选记录 {key} 缺失或不是有限数值")
+            if float(properties["predicted_mz"]) <= 0 or float(properties["molecular_weight"]) <= 0:
+                raise ValueError("候选记录质量必须为正数")
             row = {
                 "M/Z": self._format_float(item["calculated_properties"].get("predicted_mz", "")),
-                "Adduct": item["adduct_type"],
+                "Adduct": item.get("ion_model") or item["adduct_type"],
                 "Mol Weight": self._format_float(item["calculated_properties"].get("molecular_weight", "")),
                 "DBR": item["calculated_properties"].get("dbr", ""),
                 "C": self._normalize_element_count(formula_data.get("C", 0)),
@@ -1211,17 +1264,22 @@ class FormulaGenerationPage(BasePage):
     def _normalize_element_count(self, value):
         if value in ("", None):
             return 0
-        try:
-            return int(float(value))
-        except (ValueError, TypeError):
-            return 0
+        numeric = float(value)
+        if isinstance(value, bool) or not math.isfinite(numeric) or numeric < 0 or not numeric.is_integer():
+            raise ValueError("候选元素计数必须是非负整数")
+        return int(numeric)
 
     def _format_float(self, value):
         """统一浮点数格式化方法"""
         try:
-            return f"{float(value):.4f}"  # 强制保留4位小数（自动四舍五入）
+            numeric = float(value)
+            if not math.isfinite(numeric):
+                raise ValueError("候选质量必须为有限数值")
+            return str(numeric)  # 保留服务返回精度，筛选使用同一数值
         except (ValueError, TypeError):
-            return str(value)  # 非数值类型直接转字符串
+            if value in ("", None):
+                return ""
+            raise ValueError("候选质量必须为有限数值")
     
     def _apply_filters(self, *args):
         self.filter_feedback_label.configure(text="")
@@ -1238,6 +1296,8 @@ class FormulaGenerationPage(BasePage):
         self._update_filter_dirty_state()
         self._update_result_summary(total=len(self.data), matched=len(filtered_rows))
         self._render_rows_chunked(filtered_rows)
+        if self.__dict__.get("_results_stale", False):
+            self.filter_feedback_label.configure(text="输入已更改；当前候选属于上次参数，请重新分析后再发送")
 
     def _collect_filter_conditions(self):
         conditions = []
@@ -1265,6 +1325,8 @@ class FormulaGenerationPage(BasePage):
             if field_meta.get("type") == "number":
                 try:
                     parsed_value = float(value)
+                    if not math.isfinite(parsed_value):
+                        raise ValueError("finite value required")
                 except ValueError:
                     row["error_var"].set("请输入有效数值")
                     invalid_rows.append(field_name)
@@ -1274,6 +1336,8 @@ class FormulaGenerationPage(BasePage):
                 if operator == "区间":
                     try:
                         parsed_second_value = float(second_value)
+                        if not math.isfinite(parsed_second_value):
+                            raise ValueError("finite value required")
                     except ValueError:
                         row["error_var"].set("区间上限需为数值")
                         invalid_rows.append(field_name)
@@ -1298,9 +1362,9 @@ class FormulaGenerationPage(BasePage):
                     "value": value,
                 })
 
-                if invalid_rows:
-                    self.filter_feedback_label.configure(text=f"存在 {len(invalid_rows)} 条非法条件，请先修正后再应用")
-                    return None
+        if invalid_rows:
+            self.filter_feedback_label.configure(text=f"存在 {len(invalid_rows)} 条非法条件，请先修正后再应用")
+            return None
         return conditions
 
     def _item_match_condition(self, item, condition):
@@ -1388,6 +1452,9 @@ class FormulaGenerationPage(BasePage):
         return "break"
 
     def _on_table_double_click(self, event):
+        if self.__dict__.get("_results_stale", False) or self.__dict__.get("_analysis_running", False):
+            messagebox.showwarning("需要重新分析", "当前候选属于已更改的参数或分析仍在运行，请完成分析后再发送")
+            return
         item = self.table.selection()
         if not item:
             return
@@ -1473,6 +1540,9 @@ class FormulaGenerationPage(BasePage):
         return "break"
 
     def _send_selected_row_to_bus(self):
+        if self.__dict__.get("_results_stale", False) or self.__dict__.get("_analysis_running", False):
+            messagebox.showwarning("需要重新分析", "当前候选属于已更改的参数或分析仍在运行，请完成分析后再发送")
+            return
         selected_items = self.table.selection()
         if not selected_items:
             messagebox.showwarning("发送失败", "请先选中要发送的分子式")

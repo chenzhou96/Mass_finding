@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Mass Finding · 质谱工作台</title><link rel="stylesheet" href="/style.css"></head>
+<body>
+<aside class="sidebar"><div class="brand"><span class="brand-icon">m/z</span><div>Mass Finding<small>实验室质谱工作台</small></div></div>
+<div class="nav-label">工作空间</div><nav><button class="nav active" data-view="analysis">⌕ <span>候选分子式</span></button><button class="nav" data-view="search">◈ <span>PubChem 检索</span><b id="queueCount">0</b></button></nav>
+<div class="sidebar-bottom"><span class="local-dot"></span> 仅在本机运行<button id="settingsOpen">⚙ 显示与数据设置</button><p>单同位素质量 · 候选初筛<br>结果需结合谱图与标准品复核</p></div></aside>
+<main><header><div><div class="eyebrow">分析 / MASS SPECTROMETRY</div><h1 id="viewTitle">候选分子式</h1></div><div class="header-actions"><button id="example">载入示例</button><button id="importButton">打开 JSON</button><input id="importFile" type="file" accept=".json,application/json" hidden><span class="badge">● 本机工作台</span></div></header>
+<div id="notice" role="status" aria-live="polite" hidden></div>
+<section id="analysisView" class="workspace">
+<form id="analysisForm" class="panel input-panel"><div class="panel-heading"><h2>峰与离子参数</h2><span>01 / INPUT</span></div><div class="input-scroll">
+<label class="full">实测 m/z <span>Th</span><input id="mz" type="number" step="any" min="0" max="3000" required value="47.049141279571"></label>
+<div class="field-grid"><label>离子模式<select id="mode"><option>ESI+</option><option>ESI-</option><option>EI+</option><option>EI-</option></select></label><label>电荷绝对值 |z|<input id="charge" type="number" min="1" max="10" step="1" required value="1"></label></div>
+<div class="section-label">加合类型 <span>可多选</span></div><div id="adducts" class="chips"></div><p class="hint" id="ionHint">单电荷加合；中性质量 = m/z − 离子质量</p>
+<div class="section-label">误差窗口 <span>两者取较大值</span></div><div class="field-grid"><label>相对误差 %<input id="pct" type="number" min="0" max="1" step="any" value="0.0005" required></label><label>绝对误差 Th<input id="da" type="number" min="0" max="10" step="any" value="0" required></label></div><div id="windowHint" class="window-hint">±5 ppm</div>
+<div class="section-label">元素组成上限 <span>0 不选 · −1 不限</span></div><div id="elements" class="element-container"></div>
+<label class="check"><input id="dbe" type="checkbox" checked> DBE 闭壳层筛选</label><details><summary>算法适用范围</summary><p>质量枚举不能鉴定结构。DBE 假设 H/卤素一价、N/P/B 三价、C/Si 四价；自由基及高价 P/S 等可能被排除，可关闭筛选。仅支持中性简单元素式、常见同位素。多电荷仅支持质子化/去质子化；不涵盖二聚体与混合加合。</p></details>
+</div><div class="form-footer"><button id="analyze" class="primary" type="submit">生成候选</button><button id="cancel" type="button" disabled>取消</button></div></form>
+<section class="panel results-panel"><div class="panel-heading"><div><h2>候选结果 <span id="resultCount" class="count">0</span></h2><p id="resultCaption">从实测峰生成可追溯候选</p></div><div class="export-actions"><button id="jsonExport" disabled>JSON</button><button id="csvExport" disabled>CSV</button></div></div>
+<div class="results-toolbar"><input id="formulaFilter" placeholder="筛选分子式 / 加合类型" aria-label="筛选候选"><span id="resultState" class="badge neutral">等待分析</span></div>
+<div class="table-scroll"><table><thead><tr><th>分子式</th><th>离子模型</th><th>预测 m/z · Th</th><th>误差 · ppm</th><th>中性质量 · Da</th><th>DBE</th></tr></thead><tbody id="rows"></tbody></table><div id="empty" class="empty"><div class="empty-icon">⌕</div><h3>让一个峰成为可复核的候选</h3><p>填入 m/z、选择离子与元素上限。<br>示例使用合成乙醇峰；不包含实验数据。</p><button id="emptyExample">载入示例</button></div></div>
+<div class="pagination"><span id="pageSummary">尚无候选</span><div><button id="prev" disabled>上一页</button><span id="pageLabel">1 / 1</span><button id="next" disabled>下一页</button></div></div>
+<div class="candidate-detail"><div><span class="eyebrow">当前选择</span><strong id="selectedFormula">—</strong><span id="selectedDetail">选择候选查看精确质量与离子模型</span></div><button id="addSearch" disabled>加入检索 →</button></div><div class="result-footnote">质量匹配是候选证据；不能区分同分异构体，也不代表鉴定概率。</div></section>
+</section>
+<section id="searchView" class="search-workspace" hidden><section class="panel"><div class="panel-heading"><div><h2>分子式检索队列</h2><p>查询公开记录，保留失败与部分结果</p></div></div><div class="search-input"><input id="manualFormula" placeholder="如 C2H6O" aria-label="待检索分子式"><button id="addManual">添加</button></div><div id="queue"></div><div class="search-notes">联网请求发送所选分子式至 PubChem。排序为启发式参考；同义词、记录质量及离子化指标均不是鉴定概率。取消后正在进行的网络请求可持续至超时；结果不会回填。</div></section><section class="panel search-results"><div class="panel-heading"><div><h2 id="searchTitle">化合物记录</h2><p id="searchStatus">从队列选择一个分子式开始检索</p></div><button id="searchExport" disabled>导出 JSON</button></div><div class="compound-layout"><div id="compounds" class="compound-list"><p class="hint">尚无检索结果</p></div><div id="compoundDetail" class="compound-detail"><h3>可复核的公开数据库记录</h3><p>缺失字段显示“缺失”；部分批次失败显示“部分结果”。完整响应也不能证明数据库覆盖全部结构。</p></div></div></section></section>
+<footer class="app-footer"><span>Mass Finding · 共用科学引擎 v2</span><span id="draftState">参数仅保存在此浏览器</span></footer></main>
+<dialog id="settings"><div class="dialog-header"><h2>显示与数据设置</h2><button id="settingsClose" aria-label="关闭设置">×</button></div><label>结果显示小数位<select id="precision"><option value="6">6 位</option><option value="9" selected>9 位</option></select></label><label>每页候选<select id="pageSize"><option>25</option><option>50</option><option>100</option></select></label><p>显示舍入只影响表格；JSON / CSV 保留计算原始精度与完整输入。只保存参数草稿，不自动保存或上传结果。</p><button id="clearDraft">清除浏览器参数草稿</button><p class="hint">原生兼容入口：python run.py<br>浏览器入口：python -m workbench.server</p></dialog>
+<script src="/app.js"></script></body></html>

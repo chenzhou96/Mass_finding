@@ -1,4 +1,6 @@
 import tkinter as tk
+import queue
+import threading
 from tkinter import ttk, messagebox
 import json
 import logging
@@ -25,7 +27,7 @@ class FormulaSearchPage(BasePage):
     def __init__(self, parent, event_mgr):
         super().__init__(parent, event_mgr, title="Formula Search")
         self._layout_ratio = (2, 5)
-        self._detail_ratio = (1, 2)
+        self._detail_ratio = (3, 2)
         self.event_mgr.publish(
             EventType.STATUS_UPDATE, 
             data={"status_text": "loading..."}
@@ -35,10 +37,12 @@ class FormulaSearchPage(BasePage):
         self.right_frame = self.widget_factory.create_frame(self, **AppUIConfig.FunctionZone.FormulaSearchPage.output_frame)
 
         # 使用网格布局
-        self.grid_columnconfigure(0, weight=2)
-        self.grid_columnconfigure(1, weight=5)
+        self.grid_columnconfigure(0, weight=0)
+        self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
+        self.left_frame.grid_propagate(False)
+        self.right_frame.pack_propagate(False)
         self.left_frame.grid(row=0, column=0, sticky="nsew")
         self.right_frame.grid(row=0, column=1, sticky="nsew")
         self.bind("<Configure>", self._on_page_resize)
@@ -59,15 +63,18 @@ class FormulaSearchPage(BasePage):
     def _on_page_resize(self, event):
         left_ratio, right_ratio = self._layout_ratio
         total_ratio = left_ratio + right_ratio
-        if event.width <= 1 or total_ratio <= 0:
+        if event.widget is not self or event.width <= 1 or total_ratio <= 0:
             return
 
-        left_width = max(0, int(event.width * left_ratio / total_ratio))
+        left_width = max(276, min(320, int(event.width * left_ratio / total_ratio)))
         right_width = max(0, event.width - left_width)
         self.grid_columnconfigure(0, minsize=left_width)
-        self.grid_columnconfigure(1, minsize=right_width)
+        self.grid_columnconfigure(1, minsize=0)
 
     def _page_init(self):
+        self._ui_thread_id = threading.get_ident()
+        self._ui_callbacks = queue.Queue()
+        self.after(50, self._drain_ui_callbacks)
         self.widget_factory = WidgetFactory()
         self.path_manager = PathManager()
         self.thread_pool = ThreadPool()
@@ -243,8 +250,9 @@ class FormulaSearchPage(BasePage):
         return None
 
     def _set_action_buttons_enabled(self, enabled=True):
+        self._search_running = not enabled
         state = tk.NORMAL if enabled else tk.DISABLED
-        for button_name in ("search_button", "rebuild_raw_button", "remedy_button"):
+        for button_name in ("search_button", "rebuild_raw_button", "remedy_button", "clear_cache_button"):
             button = getattr(self, button_name, None)
             if button is not None:
                 try:
@@ -364,14 +372,14 @@ class FormulaSearchPage(BasePage):
             pady=BaseConfig.PADDING_A
         )
 
-        self.compound_listbox = tk.Listbox(compound_list_frame, exportselection=False)
+        self.compound_listbox = tk.Listbox(compound_list_frame, exportselection=False, height=6, font=(BaseConfig.FONT_STYLE, BaseConfig.FONT_SIZE))
         self.compound_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         compound_scroll = tk.Scrollbar(compound_list_frame, command=self.compound_listbox.yview)
         compound_scroll.pack(side=tk.RIGHT, fill=tk.Y)
         self.compound_listbox.config(yscrollcommand=compound_scroll.set)
         self.compound_listbox.bind('<<ListboxSelect>>', self._on_compound_select)
 
-        result_text_frame = self.widget_factory.create_labelframe(self.result_frame, text="化合物信息")
+        result_text_frame = self.widget_factory.create_labelframe(self.result_frame, text="候选记录（启发排序，非鉴定结论）")
         result_text_frame.grid(
             row=2,
             column=0,
@@ -415,7 +423,7 @@ class FormulaSearchPage(BasePage):
     def _on_detail_resize(self, event):
         left_ratio, right_ratio = self._detail_ratio
         total_ratio = left_ratio + right_ratio
-        if event.width <= 1 or total_ratio <= 0:
+        if event.widget is not self.result_frame or event.width <= 1 or total_ratio <= 0:
             return
 
         info_width = max(0, int(event.width * left_ratio / total_ratio))
@@ -526,6 +534,8 @@ class FormulaSearchPage(BasePage):
             return False
 
     def _clear_all_cache(self):
+        if self.__dict__.get("_search_running", False):
+            return
         retention_hours = self._show_clear_cache_options()
         if retention_hours is None:
             return
@@ -722,8 +732,24 @@ class FormulaSearchPage(BasePage):
             if frame is not None:
                 self._update_formula_display(frame, formula_list)
 
+    def _queue_ui(self, delay, callback, *args):
+        callbacks = self.__dict__.get("_ui_callbacks")
+        if callbacks is None or threading.get_ident() == self.__dict__.get("_ui_thread_id"):
+            self.after(delay, callback, *args)
+        else:
+            callbacks.put((delay, callback, args))
+
+    def _drain_ui_callbacks(self):
+        while True:
+            try:
+                delay, callback, args = self._ui_callbacks.get_nowait()
+            except queue.Empty:
+                break
+            self.after(delay, callback, *args)
+        self.after(50, self._drain_ui_callbacks)
+
     def _schedule_search_progress_update(self, payload):
-        self.after(0, self._apply_search_progress_update, payload)
+        self._queue_ui(0, self._apply_search_progress_update, payload)
 
     def _apply_search_progress_update(self, payload):
         if not isinstance(payload, dict):
@@ -963,6 +989,9 @@ class FormulaSearchPage(BasePage):
             widget.tag_add("selected_line", f"{line + 1}.0", f"{line + 1}.end")
 
     def _delete_selected_formulas(self, state):
+        if self.__dict__.get("_search_running", False):
+            logging.warning("检索期间请等待完成后再删除分子式")
+            return
         indices = sorted(state['selected_indices'], reverse=True)
         if not indices:
             return
@@ -1145,6 +1174,8 @@ class FormulaSearchPage(BasePage):
         return mapping.get(area_name)
 
     def _run_search(self, target_formulas=None, raw_only=False):
+        if self.__dict__.get("_search_running", False):
+            return
         formula_list = list(target_formulas) if target_formulas is not None else list(self.waiting_formula_list)
         if not formula_list:
             logging.warning("当前没有待搜索的分子式")
@@ -1180,6 +1211,8 @@ class FormulaSearchPage(BasePage):
             self.event_mgr.publish(EventType.STATUS_UPDATE, data={"status_text": "done"})
 
     def _run_remedy_search(self):
+        if self.__dict__.get("_search_running", False):
+            return
         remedy_targets = []
         seen = set()
 
@@ -1310,22 +1343,22 @@ class FormulaSearchPage(BasePage):
             failed_details = search_results.get("failed_details", {}) if isinstance(search_results, dict) else {}
             failed_stats = search_results.get("failed_stats", {}) if isinstance(search_results, dict) else {}
 
-            self._remove_from_waiting_list(formula_list)
-            self.after(0, self._refresh_formula_displays)
+            self._queue_ui(0, self._remove_from_waiting_list, formula_list)
+            self._queue_ui(0, self._refresh_formula_displays)
             if merged_success:
-                self.after(0, self._display_search_results, merged_success)
+                self._queue_ui(0, self._display_search_results, merged_success)
             if failed_formulas or partial_formulas:
-                self.after(0, self._display_failed_summary, failed_formulas, failed_details, failed_stats, partial_formulas)
+                self._queue_ui(0, self._display_failed_summary, failed_formulas, failed_details, failed_stats, partial_formulas)
             self._log_search_results(local_hit_results, search_results)
         except Exception as e:
             logging.error(f"搜索失败: {e}")
-            self.after(0, lambda: self.result_text.config(state=tk.NORMAL))
-            self.after(0, lambda: self.result_text.insert(tk.END, f"搜索失败: {e}\n"))
-            self.after(0, lambda: self.result_text.config(state=tk.DISABLED))
+            self._queue_ui(0, lambda: self.result_text.config(state=tk.NORMAL))
+            self._queue_ui(0, lambda error=str(e): self.result_text.insert(tk.END, f"搜索失败: {error}\n"))
+            self._queue_ui(0, lambda: self.result_text.config(state=tk.DISABLED))
         finally:
-            self.after(0, self._set_action_buttons_enabled, True)
-            self.after(0, self.event_mgr.publish, EventType.STATUS_UPDATE, {"status_text": "done"})
-            self.after(100, self._flush_pending_no_compounds_notices)
+            self._queue_ui(0, self._set_action_buttons_enabled, True)
+            self._queue_ui(0, self.event_mgr.publish, EventType.STATUS_UPDATE, {"status_text": "done"})
+            self._queue_ui(100, self._flush_pending_no_compounds_notices)
 
     def _log_search_results(self, local_hit_results, search_results):
         for formula, data in local_hit_results.items():
@@ -1472,7 +1505,7 @@ class FormulaSearchPage(BasePage):
             if mol is None:
                 self.structure_image_label.config(text="SMILES/InChI 无法解析，无法绘制结构式", image='')
                 return
-            image = Draw.MolToImage(mol, size=(360, 240))
+            image = Draw.MolToImage(mol, size=(300, 200))
             preview_dir = self.path_manager.get_structure_preview_cache_path()
             preview_name = f"structure_preview_{getattr(self, 'current_display_formula', 'unknown')}_{len(self.current_formula_results)}.png"
             preview_path = preview_dir / preview_name
@@ -1546,8 +1579,8 @@ class FormulaSearchPage(BasePage):
 
         lines = [
             f"Rank: {rank_text}",
-            f"Final Score: {score_text}",
-            "Why Selected:",
+            f"Heuristic Score (not probability): {score_text}",
+            "Ranking Reasons (not identification evidence):",
         ]
         if why_selected:
             for reason in why_selected:
@@ -1603,7 +1636,7 @@ class FormulaSearchPage(BasePage):
         else:
             status_text = "完整"
         self.formula_info_label.config(
-            text=f"分子式: {formula} | 状态: {status_text} | 过滤后展示数: {len(self.current_formula_results)}"
+            text=f"分子式: {formula} | 缓存: {status_text} | 候选: {len(self.current_formula_results)} | 分数仅辅助排序"
         )
 
         self.compound_listbox.delete(0, tk.END)
