@@ -66,6 +66,71 @@ class PubChemCompletenessTests(unittest.TestCase):
         self.assertEqual(result['batch_summary']['missing_synonym_cids'], [2])
         self.assertEqual(result['failed_batches'][0]['cids'], [2])
 
+    def test_synonym_response_rejects_malformed_cid_identity(self):
+        for invalid in (True, 1.9, '1', None, 999):
+            with self.subTest(cid=invalid), patch.object(service, '_fetch_pubchem_json', return_value={
+                'InformationList': {'Information': [{'CID': invalid, 'Synonym': ['wrong identity']}]}
+            }):
+                result = service._fetch_pubchem_synonym_map([1], per_batch_retries=1)
+                self.assertEqual(result['synonym_map'], {})
+                self.assertEqual(result['failed_batches'][0]['cids'], [1])
+
+    def test_ranking_preserves_property_completeness(self):
+        for complete in (False, True, None):
+            with self.subTest(complete=complete):
+                rows = service._rank_compounds([{'CID': 1, 'properties_complete': complete}], strict_filter=False)
+                self.assertIs(rows[0]['properties_complete'], complete)
+
+    def test_summary_only_synonym_gap_is_retried(self):
+        cache = {'status': 'partial', 'raw_results': [property_record(1, ['known'], True), property_record(2)],
+                 'failed_batches': [], 'batch_summary': {'missing_synonym_cids': [2]}}
+        result, synonyms, properties, _ = self.search_with_cache(
+            cache, {'synonym_map': {2: ['recovered']}, 'failed_batches': []})
+        self.assertEqual(synonyms.call_args.args[0], [2])
+        properties.assert_not_called()
+        self.assertFalse(result['is_partial'])
+        self.assertEqual(result['compounds'][1]['synonyms'], ['recovered'])
+
+    def test_explicit_complete_synonyms_override_stale_summary(self):
+        cache = {'status': 'partial', 'raw_results': [property_record(1, [], True), property_record(2, ['known'], True)],
+                 'failed_batches': [], 'batch_summary': {'missing_synonym_cids': [1, 2]}}
+        result, synonyms, properties, _ = self.search_with_cache(cache, {})
+        synonyms.assert_not_called()
+        properties.assert_not_called()
+        self.assertFalse(result['is_partial'])
+        self.assertEqual(result['batch_summary']['missing_synonym_cids'], [])
+
+    def test_malformed_summary_gaps_are_ignored_without_coercing_cids(self):
+        for summary in (None, [], {'missing_synonym_cids': None}, {'missing_synonym_cids': 1},
+                        {'missing_synonym_cids': [True, 1.9, '1', {}, [], 0, -1]}):
+            with self.subTest(summary=summary):
+                cache = {'status': 'partial', 'raw_results': [property_record(1), property_record(2)],
+                         'failed_batches': [], 'batch_summary': summary}
+                result, synonyms, properties, _ = self.search_with_cache(cache, {})
+                synonyms.assert_not_called()
+                properties.assert_not_called()
+                self.assertFalse(result['is_partial'])
+
+    def test_non_object_cache_does_not_break_summary_parsing(self):
+        with patch.object(service, '_load_latest_pubchem_raw_results', return_value=['corrupt']), \
+             patch.object(service, '_try_pubchem_formula_search_rest', return_value={'cids': [1]}), \
+             patch.object(service, '_build_pubchem_compounds_from_cids', return_value={
+                 'compounds': [property_record(1, [], True)], 'failed_batches': [], 'is_partial': False}), \
+             patch.object(service, '_save_pubchem_raw_data'):
+            result = service.FormulaSearchPubChem(max_retries=1).get_compounds('CH4')
+        self.assertFalse(result['is_partial'])
+        self.assertEqual(len(result['compounds']), 1)
+
+    def test_summary_only_gap_remains_partial_on_retry_failure(self):
+        cache = {'status': 'partial', 'raw_results': [property_record(1, ['known'], True), property_record(2)],
+                 'failed_batches': [], 'batch_summary': {'missing_synonym_cids': [2]}}
+        result, synonyms, properties, _ = self.search_with_cache(
+            cache, {'synonym_map': {}, 'failed_batches': [failure()]})
+        self.assertEqual(synonyms.call_args.args[0], [2])
+        properties.assert_not_called()
+        self.assertTrue(result['is_partial'])
+        self.assertEqual(result['batch_summary']['missing_synonym_cids'], [2])
+
     def test_explicit_incomplete_flag_is_authoritative(self):
         self.assertEqual(service._missing_synonym_cids([1], [property_record(1, ['old subset'], False)]), [1])
 

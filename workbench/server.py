@@ -34,8 +34,10 @@ class WorkbenchServer(ThreadingHTTPServer):
             formula = payload.get('formula', '') if isinstance(payload, dict) else ''
             if not isinstance(formula, str) or len(formula) > 100 or not re.fullmatch(r'(?:[A-Z][a-z]?\d*)+', formula):
                 raise ValueError('请输入一个简单中性分子式，如 C2H6O')
+            # Unlimited generation can exceed the 1000 finite input cap.
+            # Keep a separate bounded count for returned/manual formulas.
             tokens = re.findall(r'([A-Z][a-z]?)(\d*)', formula)
-            if any(e not in FormulaGenerator().atomic_weights or (n and (int(n) == 0 or int(n) > 1000)) for e, n in tokens):
+            if any(e not in FormulaGenerator().atomic_weights or (n and (int(n) == 0 or int(n) > 10000)) for e, n in tokens):
                 raise ValueError('分子式包含未知元素或无效计数')
             payload = {'formula': formula, 'ion_mode': payload.get('ion_mode', 'both')}
             if payload['ion_mode'] not in ('both', 'positive', 'negative'):

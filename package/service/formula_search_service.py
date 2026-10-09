@@ -728,6 +728,7 @@ def _normalize_pubchem_compound(compound: Any) -> Dict[str, Any]:
         'title': src.get('title', src.get('Title')),
         'synonyms': normalized_synonyms,
         'synonyms_complete': src.get('synonyms_complete'),
+        'properties_complete': src.get('properties_complete'),
         'cas_number': cas_numbers[0] if cas_numbers else None,
         'cas_numbers': cas_numbers,
         'isotope_atom_count': isotope_atom_count,
@@ -959,7 +960,9 @@ def _fetch_pubchem_synonym_map(
                 info_list = data.get('InformationList', {}).get('Information', [])
                 chunk_map: Dict[int, List[str]] = {}
                 for item in info_list:
-                    cid = _safe_int(item.get('CID'))
+                    cid = item.get('CID')
+                    if isinstance(cid, bool) or not isinstance(cid, int):
+                        continue
                     synonyms = _normalize_synonyms(item.get('Synonym', []))
                     if cid in cid_chunk and isinstance(item.get('Synonym'), list):
                         chunk_map[cid] = synonyms
@@ -1345,6 +1348,21 @@ class FormulaSearchPubChem(FormulaSearch):
         cached_compounds = cached_payload.get('raw_results', []) if isinstance(cached_payload, dict) else []
         cached_failed_batches = cached_payload.get('failed_batches', []) if isinstance(cached_payload, dict) else []
         cached_status = cached_payload.get('status', 'success') if isinstance(cached_payload, dict) else 'success'
+        # Legacy checkpoints can record known synonym gaps only in the summary.
+        # Carry these into record-level state before recomputing completeness.
+        cached_summary = cached_payload.get('batch_summary', {}) if isinstance(cached_payload, dict) else {}
+        raw_summary_gaps = cached_summary.get('missing_synonym_cids', []) if isinstance(cached_summary, dict) else []
+        summary_gaps = {cid for cid in raw_summary_gaps
+                        if isinstance(cid, int) and not isinstance(cid, bool) and cid > 0} if isinstance(raw_summary_gaps, list) else set()
+        if summary_gaps:
+            restored_compounds = []
+            for raw in cached_compounds:
+                item = dict(_compound_to_serializable(raw))
+                cid = _safe_int(item.get('cid', item.get('CID')))
+                if cid in summary_gaps and item.get('synonyms_complete') is not True:
+                    item['synonyms_complete'] = False
+                restored_compounds.append(item)
+            cached_compounds = restored_compounds
 
         pcp = None
         try:

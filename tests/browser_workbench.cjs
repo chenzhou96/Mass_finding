@@ -43,16 +43,64 @@ async function text(page,id){return page.locator('#'+id).textContent();}
    await page.locator('#importFile').setInputFiles({name:'synthetic-ethanol.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(saved))});
    await page.waitForFunction(()=>document.getElementById('notice').textContent.includes('文件与输入已恢复'));assert.equal(await page.locator('#mz').inputValue(),'47.049141279571');assert.equal(await page.locator('#element-H').inputValue(),'12');assert.equal(await page.locator('#jsonExport').isEnabled(),true);
   });
+  await test('Invalid prototype mode cannot partially replace imported inputs',async()=>{
+   const fixture=JSON.parse(JSON.stringify(saved));fixture.input_params.ms_mode='constructor';fixture.input_params.adduct_model=['apply'];fixture.input_params.m2z=999;fixture.results=[];
+   await page.locator('#importFile').setInputFiles({name:'synthetic-invalid-mode.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(fixture))});
+   await page.waitForFunction(()=>document.getElementById('notice').textContent.includes('无法打开'));
+   assert.equal(await page.locator('#mz').inputValue(),'47.049141279571');assert.equal(await page.locator('#mode').inputValue(),'ESI+');assert.equal(await text(page,'resultCount'),'1');assert(await page.locator('#jsonExport').isEnabled());
+  });
+  await test('Malformed ion model cannot mutate inputs or replace existing results',async()=>{
+   const fixture=JSON.parse(JSON.stringify(saved));fixture.input_params.m2z=999;fixture.results[0].ion_model={toString:1,valueOf:1};
+   await page.locator('#importFile').setInputFiles({name:'synthetic-invalid-ion-model.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(fixture))});
+   await page.waitForFunction(()=>document.getElementById('notice').textContent.includes('离子模型须为文本'));
+   assert.equal(await page.locator('#mz').inputValue(),'47.049141279571');assert.equal(await text(page,'resultCount'),'1');assert.match(await page.locator('#rows').innerText(),/C2H6O/);assert(await page.locator('#jsonExport').isEnabled());
+  });
+  await test('Unlimited element counts round-trip beyond finite input-cap bounds',async()=>{
+   await page.locator('#mz').fill('2016.657340926621');await page.locator('#pct').fill('0');await page.locator('#dbe').uncheck();
+   for(const [e,n]of Object.entries({C:0,H:-1,N:0,O:0}))await page.locator('#element-'+e).fill(String(n));
+   await page.locator('#analyze').click();await page.waitForFunction(()=>document.getElementById('resultState').textContent==='当前输入 · 候选结果');
+   const promise=page.waitForEvent('download');await page.locator('#jsonExport').click();const d=await promise;const raw=await fs.readFile(await d.path());assert.equal(JSON.parse(raw).results[0].formula.H,2000);
+   await page.locator('#importFile').setInputFiles({name:'generated-unlimited-H.json',mimeType:'application/json',buffer:raw});
+   await page.waitForFunction(()=>document.getElementById('notice').textContent.includes('文件与输入已恢复'));assert.equal(await page.locator('#element-H').inputValue(),'-1');assert.match(await page.locator('#rows').innerText(),/H2000/);
+   await page.locator('#example').click();
+  });
+  await test('Dense generated JSON larger than 5 MB round-trips unchanged',async()=>{
+   await page.locator('#mz').fill('350');await page.locator('#pct').fill('1');await page.locator('#dbe').uncheck();
+   for(const [e,n]of Object.entries({C:40,H:100,N:15,O:25}))await page.locator('#element-'+e).fill(String(n));
+   await page.locator('#analyze').click();await page.waitForFunction(()=>document.getElementById('resultCount').textContent==='12234');
+   const promise=page.waitForEvent('download');await page.locator('#jsonExport').click();const d=await promise;const raw=await fs.readFile(await d.path());assert(raw.length>5_000_000);
+   await page.locator('#importFile').setInputFiles({name:'generated-dense.json',mimeType:'application/json',buffer:raw});
+   await page.waitForFunction(()=>document.getElementById('notice').textContent.includes('文件与输入已恢复'));assert.equal(await text(page,'resultCount'),'12234');
+   const secondPromise=page.waitForEvent('download');await page.locator('#jsonExport').click();const second=await secondPromise;assert.deepEqual(JSON.parse(await fs.readFile(await second.path(),'utf8')),JSON.parse(raw));
+   await page.locator('#example').click();
+  });
+  await test('Delayed older file cannot overwrite edits, newer import, or new analysis',async()=>{
+   await page.evaluate(()=>{const original=File.prototype.text;File.prototype.text=function(){if(this.name==='delayed-older.json')return new Promise(resolve=>{window.releaseOlderImport=async()=>{resolve(await original.call(this));await new Promise(done=>setTimeout(done,0));};});return original.call(this);};window.restoreFileText=()=>{File.prototype.text=original;};});
+   const older=JSON.parse(JSON.stringify(saved));older.input_params.m2z=999;older.results=[];
+   const olderFile={name:'delayed-older.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(older))};
+   await page.locator('#importFile').setInputFiles(olderFile);await page.locator('#mz').fill('55');
+   await page.evaluate(()=>window.releaseOlderImport());
+   assert.equal(await page.locator('#mz').inputValue(),'55');assert(await page.locator('#jsonExport').isDisabled());
+   await page.locator('#importFile').setInputFiles(olderFile);
+   await page.locator('#importFile').setInputFiles({name:'newer-valid.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(saved))});
+   await page.waitForFunction(()=>document.getElementById('notice').textContent.includes('文件与输入已恢复'));
+   const latestNotice=await text(page,'notice');await page.evaluate(()=>window.releaseOlderImport());
+   assert.equal(await page.locator('#mz').inputValue(),'47.049141279571');assert.equal(await text(page,'resultCount'),'1');assert.equal(await text(page,'notice'),latestNotice);
+   await page.locator('#importFile').setInputFiles(olderFile);await page.locator('#analyze').click();
+   await page.waitForFunction(()=>!document.getElementById('analyze').disabled&&document.getElementById('resultState').textContent==='当前输入 · 候选结果');
+   await page.evaluate(async()=>{await window.releaseOlderImport();window.restoreFileText();});
+   assert.equal(await page.locator('#mz').inputValue(),'47.049141279571');assert.equal(await text(page,'resultCount'),'1');
+  });
   await test('Explicit H=0 excludes hydrogen rather than restoring unlimited H',async()=>{
    await page.locator('#element-H').fill('0');await page.locator('#analyze').click();await page.waitForFunction(()=>document.getElementById('notice').textContent.includes('无候选'));assert.equal(await text(page,'resultCount'),'0');
   });
   await test('Unsupported multicharge adduct errors recover buttons',async()=>{
    await page.locator('#element-H').fill('12');await page.locator('#charge').fill('2');await page.locator('#adducts input[value="Na+"]').check();await page.locator('#analyze').click();await page.waitForFunction(()=>document.getElementById('notice').textContent.includes('多电荷'));assert(await page.locator('#analyze').isEnabled());
   });
-  await test('Double clicks issue one job; edited inputs never receive old response',async()=>{
+  await test('Repeated submits during delayed POST issue one job; edits suppress old response',async()=>{
    await page.locator('#example').click();let requests=0;
    await page.route('**/api/analyze',async route=>{requests++;await new Promise(r=>setTimeout(r,350));await route.continue();});
-   await page.locator('#analyze').dblclick();await page.locator('#mz').fill('49');
+   await page.evaluate(()=>{const form=document.getElementById('analysisForm');form.requestSubmit();form.requestSubmit();});await page.locator('#mz').fill('49');
    await page.waitForFunction(()=>document.getElementById('notice').textContent.includes('未回填'));assert.equal(requests,1);assert.equal(await page.locator('#mz').inputValue(),'49');await page.unroute('**/api/analyze');
   });
   await test('Cancellation state never displays a finished result',async()=>{

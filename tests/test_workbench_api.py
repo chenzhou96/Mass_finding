@@ -101,8 +101,16 @@ class WorkbenchAPITests(unittest.TestCase):
         self.assertEqual(state['result'],result);search.assert_called_once_with(['C2H6O'],'PubChem',ion_mode='positive')
 
     def test_search_formula_validation_prevents_unbounded_or_unknown_formula(self):
-        for f in ('../data','C0','Xx2','C1001','<script>','',None):
+        for f in ('../data','C0','Xx2','C10001','<script>','',None):
             self.assertEqual(self.request('/api/search',{'formula':f})[0],400)
+
+    def test_search_accepts_generated_unlimited_count_above_input_cap(self):
+        # A finite input cap is limited to 1000; -1 can generate more atoms.
+        with patch('package.service.formula_search_service.start_search', return_value={}) as search:
+            status, raw, _ = self.request('/api/search', {'formula': 'H2000'})
+            self.assertEqual(status, 202)
+            self.assertEqual(self.complete(json.loads(raw)['id'])['status'], 'success')
+        search.assert_called_once_with(['H2000'], 'PubChem', ion_mode='both')
 
     def test_binding_public_interfaces_is_prohibited(self):
         with self.assertRaises(ValueError):WorkbenchServer(('0.0.0.0',0))
