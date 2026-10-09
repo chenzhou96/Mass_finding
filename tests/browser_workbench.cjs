@@ -16,12 +16,22 @@ async function text(page,id){return page.locator('#'+id).textContent();}
  try {
   const context=await browser.newContext({viewport:{width:1366,height:768},acceptDownloads:true});
   const page=await context.newPage();page.on('pageerror',error=>captureErrors.push(error.message));
-  await page.goto(base);await page.locator('#element-H').waitFor();
+  await page.goto(base);await page.locator('#element-H').waitFor();await page.evaluate(()=>document.fonts.ready);
   await test('1366×768 real Chrome: ethanol truth and normal workflow visible',async()=>{
    await page.locator('#analyze').click();await page.waitForFunction(()=>document.getElementById('resultCount').textContent==='1');
    assert.match(await page.locator('#rows').innerText(),/C2H6O/);assert.match(await page.locator('#rows').innerText(),/47\.049141280/);
-   const dbe=await page.locator('#dbe').boundingBox(),footer=await page.locator('.form-footer').boundingBox();assert(dbe.y<footer.y);assert(footer.y+footer.height<=768);
-   await page.locator('#rows tr').click();await page.screenshot({path:path.join(output,'workbench-1366x768.png'),fullPage:true});
+   await page.locator('#rows tr').click();
+   // Save evidence before asserting so font/layout failures remain inspectable.
+   await page.screenshot({path:path.join(output,'workbench-1366x768.png'),fullPage:true});
+   const geometry=await page.evaluate(()=>{
+    const selectors=['header','.workspace','.panel-heading','.input-scroll','#mz','.field-grid','.section-label','.chips','.hint','.window-hint','#elements','#advancedElements','.check','#dbe','.form-footer','.app-footer'];
+    return {viewport:{width:innerWidth,height:innerHeight},fontsReady:document.fonts.status,items:selectors.map(selector=>{
+     const element=document.querySelector(selector),rect=element.getBoundingClientRect(),style=getComputedStyle(element);
+     return {selector,x:rect.x,y:rect.y,width:rect.width,height:rect.height,clientHeight:element.clientHeight,scrollHeight:element.scrollHeight,font:style.fontFamily,fontSize:style.fontSize,lineHeight:style.lineHeight};
+    })};
+   });
+   await fs.writeFile(path.join(output,'workbench-1366x768-geometry.json'),JSON.stringify(geometry,null,2));
+   const dbe=await page.locator('#dbe').boundingBox(),footer=await page.locator('.form-footer').boundingBox();assert(dbe.y<footer.y);assert(dbe.y+dbe.height<=footer.y);assert(footer.y+footer.height<=768);
   });
   let saved;
   await test('JSON download retains original precision and full input provenance',async()=>{
