@@ -1,9 +1,11 @@
+import gc
 import json
 import logging
 import os
 import sys
 import threading
 import unittest
+import weakref
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -150,6 +152,20 @@ class _FakeEvent:
 
 
 class UiBehaviorTests(unittest.TestCase):
+    def _track_tk_fixture(self, root):
+        references = [weakref.ref(root)]
+        self.addCleanup(self._release_tk_fixture, threading.get_ident(), references)
+        return references
+
+    def _release_tk_fixture(self, owner_thread, references):
+        # destroy() releases Tcl widgets, not Python callback cycles. Run after
+        # the test frame releases its locals, before later HTTP worker threads
+        # can trigger collection of a retained, thread-affine Tcl interpreter.
+        self.assertEqual(threading.get_ident(), owner_thread)
+        gc.collect()
+        self.assertTrue(all(reference() is None for reference in references),
+                        "Destroyed Tk fixture is still retained after owning-thread cleanup")
+
     def test_formula_generation_resolves_table_column_by_displaycolumns(self):
         page = FormulaGenerationPage.__new__(FormulaGenerationPage)
         page.table = _FakeTreeviewForContextMenu()
@@ -325,9 +341,11 @@ class UiBehaviorTests(unittest.TestCase):
         try:
             import tkinter as tk
             root = tk.Tk()
+            references = self._track_tk_fixture(root)
             root.withdraw()
             factory = WidgetFactory()
             button = factory.create_rounded_button(root, text="测试", width=10, height=34)
+            references.append(weakref.ref(button))
             self.assertEqual(int(button.cget("height")), 34)
         finally:
             if root is not None:
@@ -336,10 +354,12 @@ class UiBehaviorTests(unittest.TestCase):
     def test_rounded_button_configure_updates_text_and_actual_click_guard(self):
         import tkinter as tk
         root = tk.Tk()
+        references = self._track_tk_fixture(root)
         root.withdraw()
         calls = []
         try:
             button = WidgetFactory().create_rounded_button(root, text="Run", command=lambda: calls.append("clicked"))
+            references.append(weakref.ref(button))
             button.configure(state=tk.DISABLED, text="Cancelled")
             self.assertEqual(button.cget("state"), tk.DISABLED)
             self.assertEqual(button.itemcget(button._text_id, "text"), "Cancelled")
@@ -353,12 +373,14 @@ class UiBehaviorTests(unittest.TestCase):
     def test_rounded_button_cooldown_does_not_block_cancel_sibling(self):
         import tkinter as tk
         root = tk.Tk()
+        references = self._track_tk_fixture(root)
         root.withdraw()
         calls = []
         try:
             factory = WidgetFactory()
             run = factory.create_rounded_button(root, text="Run", command=lambda: calls.append("run"), cooldown=3)
             cancel = factory.create_rounded_button(root, text="Cancel", command=lambda: calls.append("cancel"), cooldown=0)
+            references.extend((weakref.ref(run), weakref.ref(cancel)))
             run._on_click(None)
             run._on_click(None)
             cancel._on_click(None)
