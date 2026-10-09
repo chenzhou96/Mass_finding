@@ -1,5 +1,7 @@
 import tkinter as tk
-from tkinter import ttk, messagebox
+import math
+import tempfile
+from tkinter import ttk, messagebox, filedialog
 import json
 import logging
 import os
@@ -30,8 +32,8 @@ class ScoreStatisticsPage(BasePage):
         self.widget_factory = WidgetFactory()
         self.path_manager = PathManager()
 
-        self.grid_columnconfigure(0, weight=2)
-        self.grid_columnconfigure(1, weight=5)
+        self.grid_columnconfigure(0, weight=0, minsize=340)
+        self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
         self.formula_list = []          # 接收到的分子式列表
@@ -47,6 +49,7 @@ class ScoreStatisticsPage(BasePage):
 
     def _setup_left_panel(self):
         self.left_frame = self.widget_factory.create_frame(self)
+        self.left_frame.pack_propagate(False)
         self.left_frame.grid(row=0, column=0, sticky="nsew")
 
         ctrl = self.widget_factory.create_labelframe(self.left_frame, text="控制区")
@@ -55,7 +58,7 @@ class ScoreStatisticsPage(BasePage):
         row_frame = self.widget_factory.create_frame(ctrl)
         row_frame.pack(fill=tk.X, padx=BaseConfig.PADDING_A, pady=BaseConfig.PADDING_A)
 
-        self.widget_factory.create_label(row_frame, text="评分阈值:").pack(side=tk.LEFT)
+        self.widget_factory.create_label(row_frame, text="启发分数阈值:").pack(side=tk.LEFT)
         self.threshold_var = tk.DoubleVar(value=80.0)
         self.threshold_spinbox = tk.Spinbox(
             row_frame, textvariable=self.threshold_var,
@@ -103,6 +106,9 @@ class ScoreStatisticsPage(BasePage):
         self.tree.column("above", width=60, anchor="center")
         self.tree.column("pct", width=55, anchor="center")
         self.tree.column("top_score", width=60, anchor="center")
+        tree_xscroll = tk.Scrollbar(table_frame, orient=tk.HORIZONTAL, command=self.tree.xview)
+        tree_xscroll.pack(side=tk.BOTTOM, fill=tk.X)
+        self.tree.config(xscrollcommand=tree_xscroll.set)
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(BaseConfig.PADDING_A, 0), pady=BaseConfig.PADDING_A)
         tree_scroll = tk.Scrollbar(table_frame, command=self.tree.yview)
         tree_scroll.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, BaseConfig.PADDING_A), pady=BaseConfig.PADDING_A)
@@ -120,13 +126,14 @@ class ScoreStatisticsPage(BasePage):
 
     def _setup_right_panel(self):
         self.right_frame = self.widget_factory.create_frame(self)
+        self.right_frame.grid_propagate(False)
         self.right_frame.grid(row=0, column=1, sticky="nsew")
         self.right_frame.grid_rowconfigure(0, weight=1)
         self.right_frame.grid_rowconfigure(1, weight=1)
         self.right_frame.grid_columnconfigure(0, weight=1)
 
         # 上部：化合物明细
-        compound_frame = self.widget_factory.create_labelframe(self.right_frame, text="高于阈值的化合物")
+        compound_frame = self.widget_factory.create_labelframe(self.right_frame, text="高于阈值的候选（分数非鉴定概率）")
         compound_frame.grid(row=0, column=0, sticky="nsew", padx=BaseConfig.PADDING_A, pady=(BaseConfig.PADDING_A, BaseConfig.PADDING_B))
 
         self.compound_listbox = tk.Listbox(compound_frame, exportselection=False)
@@ -175,9 +182,13 @@ class ScoreStatisticsPage(BasePage):
 
     def _run_statistics(self):
         try:
-            self.current_threshold = float(self.threshold_spinbox.get())
-        except (ValueError, TypeError):
-            self.current_threshold = 80.0
+            threshold = float(self.threshold_spinbox.get())
+            if not math.isfinite(threshold) or not 0 <= threshold <= 100:
+                raise ValueError("启发分数阈值须为 0–100 的有限数值")
+        except (ValueError, TypeError, tk.TclError) as ex:
+            messagebox.showerror("阈值无效", str(ex))
+            return
+        self.current_threshold = threshold
         self.statistics_data.clear()
         self._current_compounds.clear()
         self.compound_listbox.delete(0, tk.END)
@@ -360,15 +371,34 @@ class ScoreStatisticsPage(BasePage):
             return
         desktop = self.path_manager.desktop_path
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        file_path = desktop / f"score_statistics_{timestamp}.csv"
         try:
-            with open(file_path, "w", newline="", encoding="utf-8-sig") as f:
+            file_name = filedialog.asksaveasfilename(
+                title="导出启发评分统计", initialdir=str(desktop),
+                initialfile=f"score_statistics_{timestamp}.csv", defaultextension=".csv",
+                filetypes=[("CSV文件", "*.csv")]
+            )
+        except Exception as ex:
+            messagebox.showerror("导出失败", str(ex))
+            return
+        if not file_name:
+            return
+        file_path = Path(file_name)
+        temp_path = None
+        try:
+            with tempfile.NamedTemporaryFile("w", dir=file_path.parent, prefix=".mass-finding-", suffix=".tmp",
+                                             newline="", encoding="utf-8-sig", delete=False) as f:
+                temp_path = Path(f.name)
                 writer = csv.writer(f)
-                writer.writerow(["分子式", "化合物总数", "高于阈值", "占比(%)", "最高分"])
+                writer.writerow(["分子式", "化合物总数", "高于阈值", "占比(%)", "最高分", "启发分数阈值", "用途"])
                 for formula, stats in self.statistics_data.items():
-                    writer.writerow([formula, stats["total"], stats["above"], stats["pct"], f"{stats['top_score']:.2f}"])
+                    writer.writerow([formula, stats["total"], stats["above"], stats["pct"], stats["top_score"], self.current_threshold, "候选辅助排序；非鉴定概率"])
+            os.replace(temp_path, file_path)
+            temp_path = None
             logging.info(f"统计结果已导出: {file_path}")
-            messagebox.showinfo("导出完成", f"已导出到桌面:\n{file_path.name}")
+            messagebox.showinfo("导出完成", f"已导出:\n{file_path.name}")
         except Exception as ex:
             logging.error(f"导出 CSV 失败: {ex}")
             messagebox.showerror("导出失败", str(ex))
+        finally:
+            if temp_path is not None:
+                temp_path.unlink(missing_ok=True)

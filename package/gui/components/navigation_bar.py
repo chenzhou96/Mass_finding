@@ -24,7 +24,7 @@ class NavigationBar(tk.Frame):
         
         # 生成预留接口按钮
         interface_names = {1: "评分统计"}
-        interface_count = 6
+        interface_count = 1
         for i in range(1, interface_count + 1):
             name = f"Interface_{i}_Page"
             text = interface_names.get(i, f"预留接口{i}")
@@ -32,7 +32,7 @@ class NavigationBar(tk.Frame):
 
         # 布局按钮
         for button in self.buttons.values():
-            button.pack(side=tk.LEFT, padx=5, pady=5)
+            button.pack(side=tk.LEFT, padx=3, pady=3)
 
         self.event_mgr.subscribe(EventType.PAGE_SWITCH, self._on_page_switch, priority=EventPriority.NORMAL)
 

@@ -1,4 +1,5 @@
 import json
+import math
 import logging
 import time
 import datetime
@@ -165,13 +166,63 @@ def _dedupe_compounds_by_cid(compounds: List[Any]) -> List[Dict[str, Any]]:
     return deduped
 
 
+def _property_complete_cids(compounds):
+    return _extract_cids_from_compounds([
+        item for item in compounds or []
+        if not isinstance(item, dict) or item.get('properties_complete') is not False
+    ])
+
+
+def _merge_retrieved_compounds(cached_compounds, retrieved_compounds):
+    # A new successful property response replaces an incomplete checkpoint by CID.
+    retrieved_cids = set(_extract_cids_from_compounds(retrieved_compounds))
+    retained = [item for item in cached_compounds or []
+                if not set(_extract_cids_from_compounds([item])) & retrieved_cids]
+    return _dedupe_compounds_by_cid(retained + (retrieved_compounds or []))
+
+
+def _missing_synonym_cids(requested_cids, compounds, failed_batches=None):
+    """Track retrieval gaps separately from a valid, empty synonym response."""
+    complete = set()
+    pending = set()
+    for raw in compounds or []:
+        item = _compound_to_serializable(raw)
+        cid = _safe_int(item.get('cid', item.get('CID')))
+        if cid is None:
+            continue
+        if item.get('synonyms_complete') is True or (item.get('synonyms_complete') is not False and _normalize_synonyms(item.get('synonyms', []))):
+            complete.add(cid)
+        elif item.get('synonyms_complete') is False:
+            pending.add(cid)
+    for batch in failed_batches or []:
+        if 'synonym' in str(batch.get('reason', '')):
+            pending.update(cid for raw in batch.get('cids', []) if (cid := _safe_int(raw)) is not None)
+    return [cid for cid in requested_cids or [] if cid in pending and cid not in complete]
+
+
+def _unresolved_failed_batches(requested_cids, compounds, failed_batches):
+    completed = set(_property_complete_cids(compounds))
+    requested = set(requested_cids)
+    missing_properties = requested - completed
+    missing_synonyms = set(_missing_synonym_cids(requested_cids, compounds, failed_batches))
+    unresolved = []
+    for batch in failed_batches or []:
+        pending = missing_synonyms if 'synonym' in str(batch.get('reason', '')) else missing_properties
+        cids = [cid for raw in batch.get('cids', []) if (cid := _safe_int(raw)) in pending]
+        if cids:
+            unresolved.append({**batch, 'cids': cids, 'cid_count': len(cids)})
+        elif not batch.get('cids'):
+            unresolved.append(batch)
+    return unresolved
+
+
 def _build_batch_summary(
     requested_cids: Optional[List[int]],
     compounds: List[Any],
     failed_batches: Optional[List[Dict[str, Any]]] = None,
     total_batches: int = 0,
 ) -> Dict[str, Any]:
-    completed_cids = _extract_cids_from_compounds(compounds)
+    completed_cids = _property_complete_cids(compounds)
     completed_cid_set = set(completed_cids)
 
     requested_unique: List[int] = []
@@ -183,15 +234,20 @@ def _build_batch_summary(
 
     missing_cids = [cid for cid in requested_unique if cid not in completed_cid_set]
     failure_count = len(failed_batches or [])
-    success_batches = max(0, total_batches - failure_count) if total_batches else 0
+    synonym_failure_count = sum('synonym' in str(batch.get('reason', '')) for batch in failed_batches or [])
+    property_failure_count = failure_count - synonym_failure_count
+    success_batches = max(0, total_batches - property_failure_count) if total_batches else 0
 
     return {
         'total_batches': total_batches,
         'success_batches': success_batches,
         'failed_batches': failure_count,
+        'property_failed_batches': property_failure_count,
+        'synonym_failed_batches': synonym_failure_count,
         'completed_records': len(compounds or []),
         'completed_cids': completed_cids,
         'missing_cids': missing_cids,
+        'missing_synonym_cids': _missing_synonym_cids(requested_unique, compounds, failed_batches),
     }
 
 
@@ -308,7 +364,7 @@ def _safe_int(value: Any) -> Optional[int]:
         return None
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -316,8 +372,9 @@ def _safe_float(value: Any) -> Optional[float]:
     if value is None:
         return None
     try:
-        return float(value)
-    except (TypeError, ValueError):
+        numeric = float(value)
+        return numeric if math.isfinite(numeric) else None
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -670,6 +727,8 @@ def _normalize_pubchem_compound(compound: Any) -> Dict[str, Any]:
         'charge': _safe_int(src.get('charge', src.get('Charge'))),
         'title': src.get('title', src.get('Title')),
         'synonyms': normalized_synonyms,
+        'synonyms_complete': src.get('synonyms_complete'),
+        'properties_complete': src.get('properties_complete'),
         'cas_number': cas_numbers[0] if cas_numbers else None,
         'cas_numbers': cas_numbers,
         'isotope_atom_count': isotope_atom_count,
@@ -901,13 +960,20 @@ def _fetch_pubchem_synonym_map(
                 info_list = data.get('InformationList', {}).get('Information', [])
                 chunk_map: Dict[int, List[str]] = {}
                 for item in info_list:
-                    cid = _safe_int(item.get('CID'))
+                    cid = item.get('CID')
+                    if isinstance(cid, bool) or not isinstance(cid, int):
+                        continue
                     synonyms = _normalize_synonyms(item.get('Synonym', []))
-                    if cid is not None and synonyms:
+                    if cid in cid_chunk and isinstance(item.get('Synonym'), list):
                         chunk_map[cid] = synonyms
+                omitted = [cid for cid in cid_chunk if cid not in chunk_map]
                 return {
                     'synonym_map': chunk_map,
-                    'failed_batches': [],
+                    'failed_batches': ([{
+                        'batch_index': batch_index, 'split_depth': split_depth,
+                        'cid_count': len(omitted), 'cids': omitted,
+                        'reason': 'synonym_response_missing_cids',
+                    }] if omitted else []),
                 }
             except Exception as ex:
                 last_error = str(ex)
@@ -1034,7 +1100,7 @@ def _build_pubchem_compounds_from_cids(
         cid = normalized.get('cid')
         if cid is None:
             continue
-        if normalized.get('synonyms'):
+        if (normalized.get('synonyms') and normalized.get('synonyms_complete') is not False) or (isinstance(raw, dict) and raw.get('synonyms_complete') is True):
             synonym_map[cid] = normalized['synonyms']
 
     missing_synonym_cids = [cid for cid in ordered_cids if cid not in synonym_map]
@@ -1068,10 +1134,10 @@ def _build_pubchem_compounds_from_cids(
                 data = _fetch_pubchem_json(url, timeout=timeout, endpoint_label='cid-property')
                 properties_list = data.get('PropertyTable', {}).get('Properties', [])
                 chunk_compounds: List[Dict[str, Any]] = []
-                for idx, item in enumerate(properties_list):
+                for item in properties_list:
                     cid = item.get('CID')
-                    if cid is None and idx < len(cid_chunk):
-                        cid = cid_chunk[idx]
+                    if isinstance(cid, bool) or not isinstance(cid, int) or cid not in cid_chunk:
+                        continue
                     chunk_compounds.append({
                         'CID': cid,
                         'Title': item.get('Title'),
@@ -1091,10 +1157,17 @@ def _build_pubchem_compounds_from_cids(
                         'HeavyAtomCount': item.get('HeavyAtomCount'),
                         'Charge': item.get('Charge'),
                         'synonyms': synonym_map.get(cid, []),
+                        'synonyms_complete': cid in synonym_map,
+                        'properties_complete': True,
                     })
+                missing = [cid for cid in cid_chunk if cid not in _extract_cids_from_compounds(chunk_compounds)]
                 return {
                     'compounds': chunk_compounds,
-                    'failed_batches': [],
+                    'failed_batches': ([{
+                        'batch_index': batch_index, 'split_depth': split_depth,
+                        'cid_count': len(missing), 'cids': missing,
+                        'reason': 'property_response_missing_cids',
+                    }] if missing else []),
                 }
             except Exception as ex:
                 last_error = str(ex)
@@ -1144,8 +1217,9 @@ def _build_pubchem_compounds_from_cids(
             'compounds': current_compounds,
             'failed_batches': list(failed_batches),
             'batch_summary': current_summary,
-            'is_partial': bool(current_compounds) and bool(current_missing),
-            'error': 'partial_batch_failure' if current_missing else None,
+            'is_partial': bool(current_compounds) and bool(current_missing or current_summary['missing_synonym_cids']),
+            'error': ('partial_batch_failure' if current_missing else
+                      'partial_synonym_enrichment' if current_summary['missing_synonym_cids'] else None),
         }
         if callable(progress_callback):
             try:
@@ -1156,7 +1230,7 @@ def _build_pubchem_compounds_from_cids(
     compounds = _dedupe_compounds_by_cid(compounds)
     batch_summary = _build_batch_summary(ordered_cids, compounds, failed_batches, total_batches)
     missing_cids = batch_summary.get('missing_cids', [])
-    synonym_gap = bool(synonym_fetch_failures) and any(cid not in synonym_map for cid in ordered_cids)
+    synonym_gap = bool(batch_summary['missing_synonym_cids'])
     is_partial = (bool(compounds) and bool(missing_cids)) or (bool(compounds) and synonym_gap)
     error_message = None
     if failed_batches and not compounds:
@@ -1274,6 +1348,21 @@ class FormulaSearchPubChem(FormulaSearch):
         cached_compounds = cached_payload.get('raw_results', []) if isinstance(cached_payload, dict) else []
         cached_failed_batches = cached_payload.get('failed_batches', []) if isinstance(cached_payload, dict) else []
         cached_status = cached_payload.get('status', 'success') if isinstance(cached_payload, dict) else 'success'
+        # Legacy checkpoints can record known synonym gaps only in the summary.
+        # Carry these into record-level state before recomputing completeness.
+        cached_summary = cached_payload.get('batch_summary', {}) if isinstance(cached_payload, dict) else {}
+        raw_summary_gaps = cached_summary.get('missing_synonym_cids', []) if isinstance(cached_summary, dict) else []
+        summary_gaps = {cid for cid in raw_summary_gaps
+                        if isinstance(cid, int) and not isinstance(cid, bool) and cid > 0} if isinstance(raw_summary_gaps, list) else set()
+        if summary_gaps:
+            restored_compounds = []
+            for raw in cached_compounds:
+                item = dict(_compound_to_serializable(raw))
+                cid = _safe_int(item.get('cid', item.get('CID')))
+                if cid in summary_gaps and item.get('synonyms_complete') is not True:
+                    item['synonyms_complete'] = False
+                restored_compounds.append(item)
+            cached_compounds = restored_compounds
 
         pcp = None
         try:
@@ -1310,13 +1399,39 @@ class FormulaSearchPubChem(FormulaSearch):
                         )
                         continue
 
-                    cached_cid_set = set(_extract_cids_from_compounds(cached_compounds))
+                    cached_cid_set = set(_property_complete_cids(cached_compounds))
                     missing_cids = [cid for cid in cids if cid not in cached_cid_set]
                     total_batches = (len(cids) + self.property_batch_size - 1) // self.property_batch_size
 
+                    # Resume synonym enrichment independently of property retrieval.
+                    # Already retrieved properties remain usable even when enrichment fails.
+                    pending_synonyms = [cid for cid in _missing_synonym_cids(cids, cached_compounds, cached_failed_batches) if cid in cached_cid_set]
+                    if pending_synonyms:
+                        repaired = _fetch_pubchem_synonym_map(
+                            pending_synonyms, timeout=self.http_timeout,
+                            chunk_size=self.property_batch_size,
+                            per_batch_retries=self.property_batch_retries,
+                            min_split_size=self.property_min_split_size,
+                        )
+                        repaired_map = repaired.get('synonym_map', {})
+                        updated = []
+                        for raw in cached_compounds:
+                            item = dict(_compound_to_serializable(raw))
+                            cid = _safe_int(item.get('cid', item.get('CID')))
+                            if cid in pending_synonyms:
+                                item['synonyms_complete'] = cid in repaired_map
+                                if cid in repaired_map:
+                                    item['synonyms'] = repaired_map[cid]
+                            updated.append(item)
+                        cached_compounds = updated
+                        cached_failed_batches = [batch for batch in cached_failed_batches
+                                                 if 'synonym' not in str(batch.get('reason', ''))]
+                        cached_failed_batches.extend(repaired.get('failed_batches', []))
+
+                    cached_failed_batches = _unresolved_failed_batches(cids, cached_compounds, cached_failed_batches)
                     if not missing_cids and cached_compounds:
                         summary = _build_batch_summary(cids, cached_compounds, cached_failed_batches, total_batches)
-                        is_partial = bool(summary.get('missing_cids', [])) or cached_status == 'partial'
+                        is_partial = bool(summary.get('missing_cids', []) or summary['missing_synonym_cids'])
                         result_payload = {
                             'compounds': _dedupe_compounds_by_cid(cached_compounds),
                             'failed_batches': cached_failed_batches,
@@ -1328,22 +1443,22 @@ class FormulaSearchPubChem(FormulaSearch):
                             self._set_last_error('partial', result_payload['error'] or 'partial_cache_resume_pending')
                         else:
                             self._set_last_error('other', '')
-                        return result_payload
+                        _save_pubchem_raw_data(formula, result_payload, status='partial' if is_partial else 'success')
+                        if not is_partial or self.allow_partial_results:
+                            return result_payload
+                        last_rest_error = result_payload['error']
+                        continue
 
                     def _progress_callback(fetch_payload: Dict[str, Any]):
                         if not BaseConfig.PUBCHEM_INCREMENTAL_CACHE_ENABLED:
                             return
-                        merged_compounds = _dedupe_compounds_by_cid(cached_compounds + fetch_payload.get('compounds', []))
-                        merged_summary = _build_batch_summary(
-                            cids,
-                            merged_compounds,
-                            fetch_payload.get('failed_batches', []),
-                            total_batches,
-                        )
-                        save_status = 'partial' if merged_summary.get('missing_cids', []) else 'success'
+                        merged_compounds = _merge_retrieved_compounds(cached_compounds, fetch_payload.get('compounds', []))
+                        merged_failures = _unresolved_failed_batches(cids, merged_compounds, cached_failed_batches + fetch_payload.get('failed_batches', []))
+                        merged_summary = _build_batch_summary(cids, merged_compounds, merged_failures, total_batches)
+                        save_status = 'partial' if (merged_summary.get('missing_cids', []) or merged_summary['missing_synonym_cids'] or fetch_payload.get('is_partial')) else 'success'
                         incremental_payload = {
                             'compounds': merged_compounds,
-                            'failed_batches': fetch_payload.get('failed_batches', []),
+                            'failed_batches': merged_failures,
                             'batch_summary': merged_summary,
                             'is_partial': save_status == 'partial',
                             'error': fetch_payload.get('error'),
@@ -1352,23 +1467,27 @@ class FormulaSearchPubChem(FormulaSearch):
 
                     fetch_result = _build_pubchem_compounds_from_cids(
                         missing_cids,
+                        source_compounds=cached_compounds,
                         timeout=self.http_timeout,
                         chunk_size=self.property_batch_size,
                         per_batch_retries=self.property_batch_retries,
                         min_split_size=self.property_min_split_size,
                         progress_callback=_progress_callback,
                     )
-                    merged_compounds = _dedupe_compounds_by_cid(cached_compounds + fetch_result.get('compounds', []))
-                    merged_summary = _build_batch_summary(cids, merged_compounds, fetch_result.get('failed_batches', []), total_batches)
+                    merged_compounds = _merge_retrieved_compounds(cached_compounds, fetch_result.get('compounds', []))
+                    merged_failures = _unresolved_failed_batches(cids, merged_compounds, cached_failed_batches + fetch_result.get('failed_batches', []))
+                    merged_summary = _build_batch_summary(cids, merged_compounds, merged_failures, total_batches)
                     merged_missing = merged_summary.get('missing_cids', [])
                     result_payload = {
                         'compounds': merged_compounds,
-                        'failed_batches': fetch_result.get('failed_batches', []),
+                        'failed_batches': merged_failures,
                         'batch_summary': merged_summary,
-                        'is_partial': bool(merged_compounds) and bool(merged_missing),
+                        'is_partial': bool(merged_compounds) and bool(merged_missing or merged_summary['missing_synonym_cids'] or fetch_result.get('is_partial')),
                         'error': fetch_result.get('error') or ('partial_batch_failure' if merged_missing else None),
                     }
 
+                    if result_payload.get('error'):
+                        last_rest_error = result_payload['error']
                     if merged_compounds:
                         if result_payload['is_partial']:
                             self._set_last_error('partial', result_payload['error'] or 'partial_batch_failure')
@@ -1399,19 +1518,35 @@ class FormulaSearchPubChem(FormulaSearch):
                         )
                         if enriched_payload.get('compounds'):
                             if enriched_payload.get('is_partial'):
-                                self._set_last_error('partial', enriched_payload.get('error') or 'partial_batch_failure')
+                                last_rest_error = enriched_payload.get('error') or 'partial_batch_failure'
+                                self._set_last_error('partial', last_rest_error)
+                                if self.allow_partial_results:
+                                    return enriched_payload
                             else:
                                 self._set_last_error('other', '')
-                            return enriched_payload
-                        fallback_payload = {
-                            'compounds': _dedupe_compounds_by_cid(compounds),
-                            'failed_batches': [],
-                            'batch_summary': _build_batch_summary(cids, compounds, [], len(cids)),
-                            'is_partial': False,
-                            'error': None,
-                        }
-                        self._set_last_error('other', '')
-                        return fallback_payload
+                                return enriched_payload
+                        else:
+                            # Source fields remain useful, but a failed enrichment is
+                            # an incomplete checkpoint and must be retried by CID.
+                            fallback_compounds = []
+                            for raw in _dedupe_compounds_by_cid(compounds):
+                                item = dict(raw)
+                                item['properties_complete'] = False
+                                if item.get('synonyms_complete') is not True:
+                                    item['synonyms_complete'] = bool(_normalize_synonyms(item.get('synonyms', [])))
+                                fallback_compounds.append(item)
+                            failures = enriched_payload.get('failed_batches', [])
+                            fallback_payload = {
+                                'compounds': fallback_compounds,
+                                'failed_batches': failures,
+                                'batch_summary': _build_batch_summary(cids, fallback_compounds, failures, len(cids)),
+                                'is_partial': True,
+                                'error': 'partial_fallback_enrichment:' + (enriched_payload.get('error') or 'missing_property_records'),
+                            }
+                            last_rest_error = fallback_payload['error']
+                            self._set_last_error('partial', last_rest_error)
+                            if self.allow_partial_results:
+                                return fallback_payload
 
                 if cached_compounds and self.allow_partial_results:
                     partial_summary = cached_payload.get('batch_summary') if isinstance(cached_payload.get('batch_summary'), dict) else {}
@@ -1454,6 +1589,19 @@ class SearchManager:
         self.raw_only = raw_only
         self.strict_filter = strict_filter
         self.progress_callback = progress_callback
+
+    def _export_complete_result(self, exporter, formula, compounds, status='success', batch_summary=None, failed_batches=None):
+        completeness = {
+            'status': status,
+            'batch_summary': batch_summary or {},
+            'failed_batches': failed_batches or [],
+        }
+        if hasattr(exporter, 'export_with_completeness'):
+            return exporter.export_with_completeness((formula, compounds), completeness)
+        exported = exporter.export((formula, compounds))
+        if isinstance(exported, dict):
+            exported.setdefault('metadata', {}).update(completeness)
+        return exported
 
     def _emit_progress(self, payload: Dict[str, Any]) -> None:
         if not callable(self.progress_callback):
@@ -1505,10 +1653,18 @@ class SearchManager:
                         raw_cache_status = raw_cached_payload.get('status', 'success') if isinstance(raw_cached_payload, dict) else 'success'
                         raw_failed_batches = raw_cached_payload.get('failed_batches', []) if isinstance(raw_cached_payload, dict) else []
                         raw_batch_summary = raw_cached_payload.get('batch_summary', {}) if isinstance(raw_cached_payload, dict) else {}
+                        cached_cids = _extract_cids_from_compounds(raw_cached_compounds)
+                        synonym_gaps = _missing_synonym_cids(cached_cids, raw_cached_compounds, raw_failed_batches)
+                        property_gaps = [cid for cid in cached_cids if cid not in _property_complete_cids(raw_cached_compounds)]
+                        if raw_batch_summary.get('missing_cids') or raw_batch_summary.get('missing_synonym_cids') or synonym_gaps or property_gaps:
+                            raw_cache_status = 'partial'
+                            if property_gaps:
+                                raw_batch_summary['missing_cids'] = property_gaps
+                            raw_batch_summary['missing_synonym_cids'] = synonym_gaps or raw_batch_summary.get('missing_synonym_cids', [])
 
                     if raw_cached_compounds and raw_cache_status == 'success' and not self.raw_only:
                         ranked_compounds = _rank_compounds(raw_cached_compounds, ion_mode=self.ion_mode, strict_filter=self.strict_filter)
-                        export_data = exporter.export((formula, ranked_compounds))
+                        export_data = self._export_complete_result(exporter, formula, ranked_compounds, raw_cache_status, raw_batch_summary, raw_failed_batches)
                         results["success"][formula] = export_data
                         progress_status = 'success'
                         progress_data = export_data
@@ -1518,7 +1674,7 @@ class SearchManager:
                     if self.raw_only:
                         if raw_cached_compounds:
                             ranked_compounds = _rank_compounds(raw_cached_compounds, ion_mode=self.ion_mode, strict_filter=self.strict_filter)
-                            export_data = exporter.export((formula, ranked_compounds))
+                            export_data = self._export_complete_result(exporter, formula, ranked_compounds, raw_cache_status, raw_batch_summary, raw_failed_batches)
                             results["success"][formula] = export_data
                             progress_status = 'success'
                             progress_data = export_data
@@ -1565,7 +1721,7 @@ class SearchManager:
                         error_message=payload_error,
                     )
                     ranked_compounds = _rank_compounds(payload_compounds, ion_mode=self.ion_mode, strict_filter=self.strict_filter)
-                    export_data = exporter.export((formula, ranked_compounds))
+                    export_data = self._export_complete_result(exporter, formula, ranked_compounds, save_status, payload_batch_summary, payload_failed_batches)
                     results["success"][formula] = export_data
                     progress_status = 'success'
                     progress_data = export_data

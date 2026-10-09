@@ -1,9 +1,11 @@
+import gc
 import json
 import logging
 import os
 import sys
 import threading
 import unittest
+import weakref
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -150,6 +152,20 @@ class _FakeEvent:
 
 
 class UiBehaviorTests(unittest.TestCase):
+    def _track_tk_fixture(self, root):
+        references = [weakref.ref(root)]
+        self.addCleanup(self._release_tk_fixture, threading.get_ident(), references)
+        return references
+
+    def _release_tk_fixture(self, owner_thread, references):
+        # destroy() releases Tcl widgets, not Python callback cycles. Run after
+        # the test frame releases its locals, before later HTTP worker threads
+        # can trigger collection of a retained, thread-affine Tcl interpreter.
+        self.assertEqual(threading.get_ident(), owner_thread)
+        gc.collect()
+        self.assertTrue(all(reference() is None for reference in references),
+                        "Destroyed Tk fixture is still retained after owning-thread cleanup")
+
     def test_formula_generation_resolves_table_column_by_displaycolumns(self):
         page = FormulaGenerationPage.__new__(FormulaGenerationPage)
         page.table = _FakeTreeviewForContextMenu()
@@ -170,37 +186,35 @@ class UiBehaviorTests(unittest.TestCase):
         self.assertEqual(page._current_table_context["cell_value"], "99.1234")
         self.assertEqual(page.table_popup_menu.entries[0]["state"], "normal")
 
-    def test_open_json_file_uses_formula_generation_cache_as_default_folder(self):
-        expected_dir = Path("E:/Python/Mass_finding/mass_finding_cache/formula_generation_cache")
-        page = FormulaGenerationPage.__new__(FormulaGenerationPage)
-        page.event_mgr = DummyEventManager()
+    def test_open_json_file_uses_cache_folder_and_cancel_preserves_cwd(self):
+        with TemporaryDirectory() as temp_dir:
+            expected_dir = Path(temp_dir)
+            page = FormulaGenerationPage.__new__(FormulaGenerationPage)
+            page.event_mgr = DummyEventManager()
+            original_cwd = Path.cwd()
+            with patch("package.gui.pages.formula_generation_page.PathManager") as manager, \
+                 patch("package.gui.pages.formula_generation_page.filedialog.askopenfilename", return_value="") as dialog:
+                manager.return_value.get_formula_generation_cache_path.return_value = expected_dir
+                FormulaGenerationPage._open_json_file(page)
+            self.assertEqual(dialog.call_args.kwargs["initialdir"], str(expected_dir.resolve()))
+            self.assertEqual(Path.cwd(), original_cwd)
+            self.assertEqual(page.event_mgr.status_updates[-1], "done")
 
-        with patch("package.gui.pages.formula_generation_page.PathManager") as path_manager_mock, \
-             patch("package.gui.pages.formula_generation_page.filedialog.askopenfilename", return_value="") as ask_mock:
-            path_manager_mock.return_value.get_formula_generation_cache_path.return_value = expected_dir
-
-            FormulaGenerationPage._open_json_file(page)
-
-        ask_mock.assert_called_once()
-        self.assertEqual(ask_mock.call_args.kwargs.get("initialdir"), str(expected_dir))
-        self.assertEqual(page.event_mgr.status_updates[-1], "done")
-
-    def test_open_json_file_temporarily_switches_cwd_to_cache_dir(self):
-        expected_dir = Path("E:/Python/Mass_finding/mass_finding_cache/formula_generation_cache")
-        page = FormulaGenerationPage.__new__(FormulaGenerationPage)
-        page.event_mgr = DummyEventManager()
-        original_cwd = os.getcwd()
-
-        def fake_dialog(**kwargs):
-            self.assertEqual(Path.cwd(), expected_dir)
-            return ""
-
-        with patch("package.gui.pages.formula_generation_page.PathManager") as path_manager_mock, \
-             patch("package.gui.pages.formula_generation_page.filedialog.askopenfilename", side_effect=fake_dialog):
-            path_manager_mock.return_value.get_formula_generation_cache_path.return_value = expected_dir
-            FormulaGenerationPage._open_json_file(page)
-
-        self.assertEqual(Path.cwd(), Path(original_cwd))
+    def test_open_json_file_dialog_failure_restores_status_and_preserves_previous_data(self):
+        with TemporaryDirectory() as temp_dir:
+            page = FormulaGenerationPage.__new__(FormulaGenerationPage)
+            page.event_mgr = DummyEventManager()
+            page.data = [{"old": "result"}]
+            original_cwd = Path.cwd()
+            with patch("package.gui.pages.formula_generation_page.PathManager") as manager, \
+                 patch("package.gui.pages.formula_generation_page.filedialog.askopenfilename", side_effect=RuntimeError("dialog failure")), \
+                 patch("package.gui.pages.formula_generation_page.messagebox.showerror") as error:
+                manager.return_value.get_formula_generation_cache_path.return_value = Path(temp_dir)
+                FormulaGenerationPage._open_json_file(page)
+            self.assertEqual(page.data, [{"old": "result"}])
+            self.assertEqual(Path.cwd(), original_cwd)
+            self.assertEqual(page.event_mgr.status_updates[-1], "done")
+            error.assert_called_once()
 
     def test_invalid_analysis_input_resets_status_to_done(self):
         dummy_page = SimpleNamespace(
@@ -211,11 +225,12 @@ class UiBehaviorTests(unittest.TestCase):
             error_pct=DummyVar(0.1),
             error_da=DummyVar(0.0),
             charge=DummyVar(1),
+            dbe_filter=DummyVar(True),
             element_vars={"C": DummyVar("bad")},
             thread_pool=DummyThreadPool(),
         )
 
-        with patch("package.gui.pages.formula_generation_page.DataValidator.validate", return_value=False):
+        with patch("package.gui.pages.formula_generation_page.DataValidator.validate", return_value=False), patch("package.gui.pages.formula_generation_page.messagebox.showerror"):
             FormulaGenerationPage._run_analysis(dummy_page)
 
         self.assertEqual(dummy_page.thread_pool.calls, [])
@@ -244,6 +259,19 @@ class UiBehaviorTests(unittest.TestCase):
 
         ask_mock.assert_not_called()
         self.assertTrue(destroyed["called"])
+
+    def test_page_switch_done_does_not_hide_running_background_task(self):
+        app = APP.__new__(APP)
+        app.page_factory = SimpleNamespace(_instances={"generation": SimpleNamespace(_analysis_running=True), "search": SimpleNamespace(_search_running=False)})
+        event = SimpleNamespace(data={"status_text": "done"})
+        app._on_status_update(event)
+        self.assertEqual(app.current_status_text, "running...")
+        self.assertEqual(event.data["status_text"], "running...")
+        app.current_status_text = "done"
+        app.destroy = lambda: self.fail("active task closed without confirmation")
+        with patch("package.gui.main_window.messagebox.askyesno", return_value=False) as confirm:
+            app._on_close_request()
+        confirm.assert_called_once()
 
     def test_event_bus_publish_does_not_deadlock_when_log_listener_fails(self):
         from package.config.event_config import EventPriority, EventType
@@ -313,13 +341,52 @@ class UiBehaviorTests(unittest.TestCase):
         try:
             import tkinter as tk
             root = tk.Tk()
+            references = self._track_tk_fixture(root)
             root.withdraw()
             factory = WidgetFactory()
             button = factory.create_rounded_button(root, text="测试", width=10, height=34)
+            references.append(weakref.ref(button))
             self.assertEqual(int(button.cget("height")), 34)
         finally:
             if root is not None:
                 root.destroy()
+
+    def test_rounded_button_configure_updates_text_and_actual_click_guard(self):
+        import tkinter as tk
+        root = tk.Tk()
+        references = self._track_tk_fixture(root)
+        root.withdraw()
+        calls = []
+        try:
+            button = WidgetFactory().create_rounded_button(root, text="Run", command=lambda: calls.append("clicked"))
+            references.append(weakref.ref(button))
+            button.configure(state=tk.DISABLED, text="Cancelled")
+            self.assertEqual(button.cget("state"), tk.DISABLED)
+            self.assertEqual(button.itemcget(button._text_id, "text"), "Cancelled")
+            button._draw_button(button.cget("text"))
+            self.assertEqual(button.itemcget(button._rect, "fill"), "#dddddd")
+            button._on_click(None)
+            self.assertEqual(calls, [])
+        finally:
+            root.destroy()
+
+    def test_rounded_button_cooldown_does_not_block_cancel_sibling(self):
+        import tkinter as tk
+        root = tk.Tk()
+        references = self._track_tk_fixture(root)
+        root.withdraw()
+        calls = []
+        try:
+            factory = WidgetFactory()
+            run = factory.create_rounded_button(root, text="Run", command=lambda: calls.append("run"), cooldown=3)
+            cancel = factory.create_rounded_button(root, text="Cancel", command=lambda: calls.append("cancel"), cooldown=0)
+            references.extend((weakref.ref(run), weakref.ref(cancel)))
+            run._on_click(None)
+            run._on_click(None)
+            cancel._on_click(None)
+            self.assertEqual(calls, ["run", "cancel"])
+        finally:
+            root.destroy()
 
     def test_delete_existing_formula_removes_search_cache_and_syncs_existing_file(self):
         with TemporaryDirectory() as temp_dir:

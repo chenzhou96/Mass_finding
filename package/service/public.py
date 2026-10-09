@@ -11,7 +11,7 @@ from ..config.path_config import PathManager
 class CSVExporter_formulaGeneration:
     def export(self, results: dict):
         try:
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             path_manager = PathManager()
             path_manager.get_mass_finding_cache_path()
             csv_path = os.path.join(path_manager.get_formula_generation_cache_path(), f'mass_data_{timestamp}.csv')
@@ -38,6 +38,8 @@ class CSVExporter_formulaGeneration:
                     f"error_da: {input_params.get('error_da', 0)}Da",
                     f"charge: {input_params['charge']}",
                     f"elements: {input_params['elements']}",
+                    f"dbe_filter: {input_params.get('dbe_filter', True)}",
+                    f"metadata: {json.dumps(results.get('metadata', {}), ensure_ascii=False)}",
                     
                 ])
                 
@@ -45,7 +47,7 @@ class CSVExporter_formulaGeneration:
                 writer.writerow([
                     'C', 'H', 'O', 'N', 'S', 'P', 'Si', 'B', 'Se',
                     'F', 'Cl', 'Br', 'I', 'ion', 'dbr', 
-                    'predicted_mz', 'molecular_weight'  # 新增列
+                    'predicted_mz', 'molecular_weight', 'ion_model', 'error_th', 'error_ppm'
                 ])
 
                 # 更新数据行添加分子量
@@ -68,8 +70,11 @@ class CSVExporter_formulaGeneration:
                             element_counts.get('I', 0),
                             adduct,
                             f"{float(dbr):.1f}",
-                            f"{float(predicted_mz):.4f}",
-                            f"{float(molecular_weight):.4f}"  # 新增分子量数据
+                            repr(float(predicted_mz)),
+                            repr(float(molecular_weight)),
+                            formula.get('ion_model', ''),
+                            formula.get('calculated_properties', {}).get('error_th', ''),
+                            formula.get('calculated_properties', {}).get('error_ppm', '')
                         ])
 
             logging.info(f"CSV 文件已成功导出: {csv_path}")
@@ -80,7 +85,7 @@ class CSVExporter_formulaGeneration:
 class JSONExporter_formulaGeneration:
     def export(self, results: dict):
         try:
-            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S_%f")
             path_manager = PathManager()
             path_manager.get_mass_finding_cache_path()
             json_path = os.path.join(path_manager.get_formula_generation_cache_path(), f'mass_data_{timestamp}.json')
@@ -98,6 +103,7 @@ class JSONExporter_formulaGeneration:
                 "metadata": {
                     "export_time": datetime.datetime.now().isoformat(),
                     "software_version": BaseConfig.VERSION,
+                    **results.get("metadata", {}),
                 },
                 "input_params": results["input_params"],  # 使用完整输入参数
                 "results": []
@@ -110,10 +116,12 @@ class JSONExporter_formulaGeneration:
                     data_to_save["results"].append({
                         "formula": element_counts,
                         "adduct_type": adduct_type,
+                        "ion_model": formula.get("ion_model"),
                         "calculated_properties": {
                             "dbr": dbr,
                             "predicted_mz": predicted_mz,
-                            "molecular_weight": molecular_weight
+                            "molecular_weight": molecular_weight,
+                            **formula.get("calculated_properties", {})
                         }
                     })
 
@@ -129,6 +137,9 @@ class JSONExporter_formulaGeneration:
             raise
 
 class JSONExporter_formulaSearch_PubChem:
+    def export_with_completeness(self, results, completeness):
+        return self.export((*results, completeness))
+
     def _get_value(self, compound, attr, aliases=None, default=None):
         if isinstance(compound, dict):
             if aliases:
@@ -141,7 +152,8 @@ class JSONExporter_formulaSearch_PubChem:
     def export(self, results: tuple):
         # 传递的参数是元组，形式（molecular_formula: str, compounds: list）
         try:
-            molecular_formula, compounds = results
+            molecular_formula, compounds = results[:2]
+            completeness = results[2] if len(results) > 2 else {}
             results_list = []
             count = 0
 
@@ -180,6 +192,8 @@ class JSONExporter_formulaSearch_PubChem:
                     "final_score": self._get_value(compound, 'final_score', ['final_score']),
                     "score_breakdown": self._get_value(compound, 'score_breakdown', ['score_breakdown'], {}),
                     "why_selected": self._get_value(compound, 'why_selected', ['why_selected'], []),
+                    "synonyms_complete": self._get_value(compound, "synonyms_complete", default=None),
+                    "properties_complete": self._get_value(compound, "properties_complete", default=None),
                     "data_quality": self._get_value(compound, 'data_quality', ['data_quality'], {}),
                 }
                 results_list.append(data)
@@ -202,6 +216,8 @@ class JSONExporter_formulaSearch_PubChem:
                     "monoisotopic_mass": monoisotopic_mass,
                     "molecular_weight": molecular_weight,
                     "top_final_score": top_final_score,
+                    "ranking_interpretation": "heuristic ordering; not identification probability",
+                    **completeness,
                 },
                 "results": results_list
             }

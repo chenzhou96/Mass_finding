@@ -9,7 +9,8 @@ class AppUIConfig:
         TITLE = f"质谱数据分析工具 V{BaseConfig.VERSION} - designed by zc"
         ICO = "./package/icon.ico"
         ICNS = "./package/icon.icns"
-        WINDOW_SIZE = BaseConfig.WINDOW_SIZE
+        WINDOW_SIZE = "1280x720"
+        MIN_SIZE = (960, 600)
         BG_COLOR = BaseConfig.BACKGROUND
 
         frame = {
@@ -154,7 +155,7 @@ class AppUIConfig:
             }
 
             input_entry = {
-                'width': 150,
+                'width': 12,
             }
 
             padding = {
@@ -163,7 +164,7 @@ class AppUIConfig:
             }
 
             canvas = {
-                'width': 150,
+                'width': 12,
             }
 
             option_menu = {

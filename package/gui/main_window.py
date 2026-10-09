@@ -45,6 +45,7 @@ class APP(tk.Tk):
         self.current_status_text = "done"
         self.title(AppUIConfig.MainWindow.TITLE)
         self.geometry(AppUIConfig.MainWindow.WINDOW_SIZE)
+        self.minsize(*AppUIConfig.MainWindow.MIN_SIZE)
         self.configure(bg=AppUIConfig.MainWindow.BG_COLOR)
         self.protocol("WM_DELETE_WINDOW", self._on_close_request)
         self._set_icon()
@@ -123,7 +124,7 @@ class APP(tk.Tk):
         )
         self.upper_frame = self.widget_factory.create_labelframe(
             self.right_paned,
-            text='分子式 bus',
+            text='候选分子式暂存',
             **AppUIConfig.InteractiveZone.frame
         )
         self.lower_frame = self.widget_factory.create_labelframe(
@@ -380,7 +381,9 @@ class APP(tk.Tk):
             expand=True,
         )
         self.main_paned.pack(fill=tk.BOTH, expand=True, pady=BaseConfig.PADDING_A)
-        self.main_paned.add(self.left_frame, minsize=420, stretch="always")
+        self.left_frame.pack_propagate(False)
+        self.right_frame.pack_propagate(False)
+        self.main_paned.add(self.left_frame, minsize=620, stretch="always")
         self.main_paned.add(self.right_frame, minsize=240, stretch="always")
 
         self.right_paned.pack(fill=tk.BOTH, expand=True)
@@ -444,16 +447,25 @@ class APP(tk.Tk):
         self.event_mgr.subscribe(
             EventType.STATUS_UPDATE,
             self._on_status_update,
-            priority=EventPriority.NORMAL
+            priority=EventPriority.HIGH
         )
+
+    def _has_active_tasks(self):
+        factory = self.__dict__.get("page_factory")
+        pages = getattr(factory, "_instances", {}).values() if factory is not None else []
+        return any(page.__dict__.get("_analysis_running", False) or page.__dict__.get("_search_running", False)
+                   for page in pages)
 
     def _on_status_update(self, event):
         data = event.data if isinstance(event.data, dict) else {}
+        if self._has_active_tasks():
+            data["status_text"] = "running..."
+            event.data = data
         self.current_status_text = data.get("status_text", "") or ""
 
     def _on_close_request(self):
         status_text = str(getattr(self, "current_status_text", "")).strip().lower()
-        is_running = status_text.startswith("running")
+        is_running = status_text.startswith("running") or self._has_active_tasks()
         if is_running:
             should_close = messagebox.askyesno(
                 "确认退出",
@@ -464,7 +476,7 @@ class APP(tk.Tk):
         self.destroy()
 
     def _setup_initial_page(self):
-        initial_page = self.page_factory.get_page('Blank_Page')
+        initial_page = self.page_factory.get_page('Formula_Generation_Page')
         self.show_page(initial_page)
 
     def show_page(self, page):
