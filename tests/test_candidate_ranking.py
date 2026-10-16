@@ -164,7 +164,7 @@ class CandidateRankingTests(unittest.TestCase):
             with patch('package.service.public.PathManager', Paths):
                 exported = JSONExporter_formulaSearch_PubChem().export_with_completeness(
                     ('CH4', [row]), {'status': 'partial', 'batch_summary': {'missing_synonym_cids': [1]}})
-            disk = json.loads((Path(temp) / 'formula_search_results_CH4.json').read_text())
+            disk = json.loads((Path(temp) / 'formula_search_results_CH4.json').read_text(encoding='utf-8'))
         self.assertEqual(disk, exported)
         for key in ('ranking_model', 'ranking_evidence', 'score_weights', 'score_breakdown', 'why_selected'):
             self.assertEqual(disk['results'][0][key], row[key])
