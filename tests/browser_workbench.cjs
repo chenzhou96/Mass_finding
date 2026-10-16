@@ -163,6 +163,27 @@ async function text(page,id){return page.locator('#'+id).textContent();}
    assert.match(await text(page,'compoundDetail'),/缺失/);assert.match(await text(page,'compoundDetail'),/≠ 鉴定概率/);await page.screenshot({path:path.join(output,'pubchem-synthetic-partial-1366x768.png'),fullPage:true});
    await page.unroute('**/api/search');await page.unroute('**/api/jobs/synthetic-partial');
   });
+  await test('Synthetic ranked reagent evidence renders and exports with provenance',async()=>{
+   const {execFileSync}=require('node:child_process');
+   const rows=JSON.parse(execFileSync(process.env.PYTHON||'python',['-c',
+    "import json; from package.service.formula_search_service import _rank_compounds; print(json.dumps(_rank_compounds([{'CID':1,'Title':'Synthetic grade candidate','synonyms':['ACS reagent grade','<img src=x onerror=alert(1)>'],'synonyms_complete':False},{'CID':2,'Title':'Synthetic aliases','synonyms':['Alias '+str(i) for i in range(100)]}],strict_filter=False)))"
+   ],{encoding:'utf8'}));
+   assert.equal(rows[0].cid,1);
+   const result={success:{C2H6O:{metadata:{status:'partial'},results:rows}},partial:{C2H6O:{message:'synthetic synonym gap'}}};
+   await page.route('**/api/search',r=>r.fulfill({status:202,contentType:'application/json',body:'{"id":"synthetic-ranking"}'}));
+   await page.route('**/api/jobs/synthetic-ranking',r=>r.fulfill({contentType:'application/json',body:JSON.stringify({status:'success',result})}));
+   await page.locator('#queue button').filter({hasText:'查询 / 重试'}).first().click();
+   await page.waitForFunction(()=>document.getElementById('compoundDetail').textContent.includes('pubchem-reagent-prior-v1'));
+   const detail=await text(page,'compoundDetail');assert.match(detail,/ACS reagent/);assert.match(detail,/商品化文本出处 · synonyms/);assert.match(detail,/未核实在售/);assert.match(detail,/缺口/);assert.match(detail,/0\.7 \/ 0\.2 \/ 0\.1/);
+   assert.equal(await page.locator('#compoundDetail img').count(),0);
+   const promise=page.waitForEvent('download');await page.locator('#searchExport').click();const download=await promise;
+   const exported=JSON.parse(await fs.readFile(await download.path(),'utf8'));assert.deepEqual(exported,result.success.C2H6O);
+   await page.screenshot({path:path.join(output,'pubchem-synthetic-ranking-1366x768.png'),fullPage:true});
+   await page.setViewportSize({width:640,height:720});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+   await page.locator('#compoundDetail a').scrollIntoViewIfNeeded();assert(await page.locator('#compoundDetail a').isVisible());
+   await page.screenshot({path:path.join(output,'pubchem-synthetic-ranking-640x720.png'),fullPage:true});await page.setViewportSize({width:1366,height:768});
+   await page.unroute('**/api/search');await page.unroute('**/api/jobs/synthetic-ranking');
+  });
   await test('PubChem synthetic failure remains retryable',async()=>{
    await page.route('**/api/search',r=>r.fulfill({status:202,contentType:'application/json',body:'{"id":"synthetic-error"}'}));await page.route('**/api/jobs/synthetic-error',r=>r.fulfill({contentType:'application/json',body:'{"status":"error","error":"synthetic timeout"}'}));
    await page.locator('#queue button').filter({hasText:'查询 / 重试'}).first().click();await page.waitForFunction(()=>document.getElementById('queue').textContent.includes('保留待重试'));assert(await page.locator('#queue button').filter({hasText:'查询 / 重试'}).isEnabled());

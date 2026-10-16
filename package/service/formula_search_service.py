@@ -74,32 +74,19 @@ SCORE_WEIGHT_BY_MODE: Dict[str, Dict[str, float]] = {
 }
 
 
-COMMERCIAL_KEYWORD_WEIGHTS: Dict[str, float] = {
-    'for mass spectrometry': 0.08,
-    'reference standard': 0.10,
-    'certified reference material': 0.10,
-    'usp': 0.08,
-    'ep': 0.08,
-    'grade': 0.05,
-    'solution': 0.04,
-    'buffer': 0.04,
-}
-
-COMMERCIAL_BOOST_CAP = 0.20
+# Task-tuned evidence weights, not occurrence probabilities or supplier counts.
+RANKING_MODEL = 'pubchem-reagent-prior-v1'
+COMMERCIAL_BOOST_CAP = 0.65
+COMMERCIAL_TEXT_RULES = (
+    ('reagent_use', 0.45, r'reagent[- ]grade|analytical[- ]grade|ACS[- ](?:reagent|grade)|for molecular biology|for biochemistry|cell culture(?:[- ]tested|[- ]grade)|biological buffer'),
+    ('vendor_text', 0.20, r'Sigma[- ]Aldrich|Alfa Aesar|TCI[- ]chemicals|Fisher Scientific'),
+    ('standard', 0.15, r'(?:certified )?reference (?:standard|material)|(?:USP|EP|BP)[- ](?:reference )?standard|for mass spectrometry'),
+)
 
 PUBLIC_RECORD_MARKERS = (
     'CAS', 'UNII', 'CHEBI', 'CHEMBL', 'PUBCHEM', 'HMDB', 'KEGG', 'DRUGBANK', 'LIPIDMAPS', 'METLIN'
 )
-
-BIOLOGICAL_RECORD_MARKERS = (
-    'HMDB', 'KEGG', 'LIPIDMAPS', 'DRUGBANK', 'METLIN', 'BIOCYC'
-)
-
-KNOWN_BIOACTIVE_NAME_MARKERS = (
-    'IBUPROFEN', 'DEXIBUPROFEN', 'NAPROXEN', 'DICLOFENAC', 'KETOPROFEN',
-    'FLURBIPROFEN', 'FENOPROFEN', 'ASPIRIN', 'PARACETAMOL', 'ACETAMINOPHEN',
-    'LIDOCAINE', 'CAFFEINE', 'CHOLESTEROL', 'GLUCOSE'
-)
+BIOLOGICAL_RECORD_MARKERS = ('HMDB', 'KEGG', 'LIPIDMAPS', 'DRUGBANK', 'METLIN', 'BIOCYC')
 
 CAS_PATTERN = re.compile(r'(?<!\d)\d{2,7}-\d{2}-\d(?!\d)')
 
@@ -436,100 +423,78 @@ def _get_safe_split_point(chunk_length: int, min_chunk_size: int) -> Optional[in
     return split_point
 
 
+def _distinct_synonyms(synonyms: Any) -> List[str]:
+    """Score name diversity without rewriting chemical punctuation or source data."""
+    unique = {}
+    for name in _normalize_synonyms(synonyms):
+        key = ' '.join(name.split()).casefold()
+        unique.setdefault(key, name)
+    return list(unique.values())
+
+
 def _estimate_prevalence_from_synonyms(synonyms: List[str]) -> float:
-    if not synonyms:
-        return 0.0
-
-    trusted_count = 0
-    for name in synonyms:
-        upper_name = name.upper()
-        if any(marker in upper_name for marker in PUBLIC_RECORD_MARKERS):
-            trusted_count += 1
-
-    raw_score = min(len(synonyms), 60) / 60.0
-    trusted_bonus = min(trusted_count, 12) / 48.0
-    return max(0.0, min(1.0, raw_score + trusted_bonus))
+    # Alias volume is weak annotation support, never measured prevalence.
+    return min(len(_distinct_synonyms(synonyms)), 60) / 60.0 * 0.15
 
 
 def _normalize_text_key(text: Any) -> str:
-    if not isinstance(text, str):
-        return ''
-    return ''.join(ch.lower() for ch in text.strip() if ch.isalnum())
+    return ' '.join(text.split()).casefold() if isinstance(text, str) else ''
 
 
-def _estimate_prevalence_from_compound(compound: Dict[str, Any]) -> float:
-    synonyms = compound.get('synonyms', []) if isinstance(compound.get('synonyms', []), list) else []
-    synonym_score = _estimate_prevalence_from_synonyms(synonyms)
-    if synonym_score > 0.0:
-        return synonym_score
-
-    marker_info = _collect_reference_markers(compound)
-    public_markers = marker_info.get('public_markers', [])
-    bio_markers = marker_info.get('bio_markers', [])
-
-    title = compound.get('title')
-    iupac_name = compound.get('iupac_name')
-    title_key = _normalize_text_key(title)
-    iupac_key = _normalize_text_key(iupac_name)
-    combined_text = ' | '.join(
-        value.strip().upper()
-        for value in (title, iupac_name)
-        if isinstance(value, str) and value.strip()
-    )
-
-    fallback_score = 0.0
-    if public_markers:
-        fallback_score += min(len(public_markers), 3) * 0.08
-    if bio_markers:
-        fallback_score += min(len(bio_markers), 3) * 0.05
-
-    if title_key and iupac_key and title_key != iupac_key:
-        fallback_score += 0.12
-        if len(title_key) + 8 < len(iupac_key):
-            fallback_score += 0.08
-
-    if any(marker in combined_text for marker in KNOWN_BIOACTIVE_NAME_MARKERS):
-        fallback_score += 0.15
-
-    return max(0.0, min(0.35, fallback_score))
+def _ranking_text_fields(compound: Dict[str, Any]):
+    for key in ('title', 'iupac_name'):
+        text = compound.get(key)
+        if isinstance(text, str) and text.strip():
+            yield key, text.strip()
+    for text in _distinct_synonyms(compound.get('synonyms', [])):
+        yield 'synonyms', text
 
 
 def _collect_reference_markers(compound: Dict[str, Any]) -> Dict[str, List[str]]:
-    text_pool: List[str] = []
+    texts = [text for _field, text in _ranking_text_fields(compound)]
 
-    synonyms = compound.get('synonyms', [])
-    if isinstance(synonyms, list):
-        text_pool.extend(item for item in synonyms if isinstance(item, str) and item.strip())
-
-    for key in ('title', 'iupac_name'):
-        value = compound.get(key)
-        if isinstance(value, str) and value.strip():
-            text_pool.append(value.strip())
-
-    combined = ' | '.join(text_pool).upper()
-    public_markers = [marker for marker in PUBLIC_RECORD_MARKERS if marker in combined]
-    bio_markers = [marker for marker in BIOLOGICAL_RECORD_MARKERS if marker in combined]
+    def present(marker):
+        # Permit registry accession digits (HMDB00001), not word substrings.
+        pattern = r'(?<![A-Za-z0-9])' + re.escape(marker) + r'(?![A-Za-z])'
+        return any(re.search(pattern, text, re.IGNORECASE) for text in texts)
 
     return {
-        'public_markers': list(dict.fromkeys(public_markers)),
-        'bio_markers': list(dict.fromkeys(bio_markers)),
+        'public_markers': [marker for marker in PUBLIC_RECORD_MARKERS if present(marker)],
+        'bio_markers': [marker for marker in BIOLOGICAL_RECORD_MARKERS if present(marker)],
     }
 
 
+def _estimate_prevalence_from_compound(compound: Dict[str, Any]) -> float:
+    alias_support = _estimate_prevalence_from_synonyms(compound.get('synonyms', []))
+    registry_support = min(len(_collect_reference_markers(compound)['public_markers']), 3) * 0.05
+    title = _normalize_text_key(compound.get('title'))
+    iupac = _normalize_text_key(compound.get('iupac_name'))
+    # A non-systematic label is only a weak, generic naming clue. No compound list.
+    title_support = 0.05 if title and iupac and title != iupac else 0.0
+    return min(0.35, alias_support + registry_support + title_support)
+
+
+def _commercial_text_evidence(compound: Dict[str, Any]) -> Dict[str, Any]:
+    matches = []
+    score = 0.0
+    for category, weight, expression in COMMERCIAL_TEXT_RULES:
+        pattern = re.compile(r'(?<![A-Za-z0-9])(?:' + expression + r')(?![A-Za-z0-9])', re.IGNORECASE)
+        for field, text in _ranking_text_fields(compound):
+            matching_text = ' '.join(text.split())
+            match = next((candidate for candidate in pattern.finditer(matching_text)
+                          if not re.search(r'\b(?:not|non|no|without)[\s-]+(?:\w+[\s-]+){0,3}$',
+                                           matching_text[:candidate.start()], re.IGNORECASE)), None)
+            if match:
+                matches.append({'category': category, 'field': field, 'text': text,
+                                'matched_text': match.group(0), 'weight': weight})
+                score += weight
+                break  # Correlated/repeated labels never count as separate sellers.
+    return {'score': min(COMMERCIAL_BOOST_CAP, score), 'matches': matches}
+
+
 def _commercial_availability_boost(synonyms: List[str]) -> float:
-    if not synonyms:
-        return 0.0
-
-    lowered = [name.lower() for name in synonyms if isinstance(name, str)]
-    if not lowered:
-        return 0.0
-
-    boost = 0.0
-    for keyword, weight in COMMERCIAL_KEYWORD_WEIGHTS.items():
-        if any(keyword in name for name in lowered):
-            boost += weight
-
-    return max(0.0, min(COMMERCIAL_BOOST_CAP, boost))
+    # Compatibility helper: this is a textual clue, not verified availability.
+    return _commercial_text_evidence({'synonyms': synonyms})['score']
 
 
 def _contains_isotope_marker(inchi: Any) -> bool:
@@ -656,37 +621,26 @@ def _build_why_selected(
     commercial_boost: float = 0.0,
 ) -> List[str]:
     reasons: List[str] = []
-    synonyms = compound.get('synonyms', []) if isinstance(compound.get('synonyms', []), list) else []
-    synonym_count = len(synonyms)
-    marker_info = _collect_reference_markers(compound)
-    public_markers = marker_info.get('public_markers', [])
-    bio_markers = marker_info.get('bio_markers', [])
-
-    if synonym_count >= 15 or prevalence_score >= 0.70:
-        if public_markers:
-            reasons.append(f"公共记录丰富（{'/'.join(public_markers[:3])}）")
-        else:
-            reasons.append(f'公共记录丰富（同义词 {synonym_count} 条）')
-    elif synonym_count >= 6:
-        reasons.append(f'有一定公共记录支持（同义词 {synonym_count} 条）')
-
-    if bio_markers:
-        reasons.append(f"命中生物相关词条：{'/'.join(bio_markers[:3])}")
-
-    if commercial_boost >= 0.08:
-        reasons.append('含标准品/试剂关键词')
-
+    evidence = compound.get('ranking_evidence', {})
+    commercial = evidence.get('commercial_matches', [])
+    if commercial:
+        labels = '/'.join(item['matched_text'] for item in commercial)
+        reasons.append(f'商品化文本线索（未核实在售）：{labels}')
+    if compound.get('synonyms_complete') is False:
+        reasons.append('同义词存在缺口，排序依据不完整')
+    elif compound.get('synonyms_complete') is not True:
+        reasons.append('同义词完整性未记录')
+    markers = _collect_reference_markers(compound)['public_markers']
+    if markers:
+        reasons.append(f"数据库标识文本线索：{'/'.join(markers[:3])}（非引用次数）")
+    elif evidence.get('unique_synonym_count', 0):
+        reasons.append(f"不同名称 {evidence['unique_synonym_count']} 条（弱线索，非使用频率）")
     if quality_score >= 0.80:
-        reasons.append('结构字段较完整')
-    elif compound.get('inchikey') or compound.get('inchi') or compound.get('canonical_smiles'):
-        reasons.append('具备基础结构标识')
-
+        reasons.append('结构字段较完整（非存在概率）')
+    elif not commercial:
+        reasons.append('商品化信息未核实；低分不排除候选')
     if ion_score >= 0.80 and len(reasons) < 4:
-        reasons.append('离子化可见性较好')
-
-    if not reasons:
-        reasons.append('公共记录较少，但可作候选参考')
-
+        reasons.append('规则化离子化指标较高（非实测）')
     return reasons[:4]
 
 
@@ -711,8 +665,8 @@ def _normalize_pubchem_compound(compound: Any) -> Dict[str, Any]:
     normalized = {
         'cid': _safe_int(src.get('cid', src.get('CID'))),
         'iupac_name': src.get('iupac_name', src.get('IUPACName')),
-        'isomeric_smiles': src.get('isomeric_smiles', src.get('IsomericSMILES')),
-        'canonical_smiles': src.get('canonical_smiles', src.get('CanonicalSMILES')),
+        'isomeric_smiles': src.get('isomeric_smiles') or src.get('IsomericSMILES') or src.get('smiles') or src.get('SMILES'),
+        'canonical_smiles': src.get('canonical_smiles') or src.get('CanonicalSMILES') or src.get('connectivity_smiles') or src.get('ConnectivitySMILES'),
         'inchi': inchi_value,
         'inchikey': src.get('inchikey', src.get('InChIKey')),
         'molecular_weight': _safe_float(src.get('molecular_weight', src.get('MolecularWeight'))),
@@ -772,7 +726,8 @@ def _rank_compounds(compounds: List[Any], ion_mode: str = 'both', strict_filter:
         ion_score = _ionization_likelihood_score(compound, mode)
         quality_score = _record_quality_score(compound)
         base_prevalence_score = _estimate_prevalence_from_compound(compound)
-        commercial_boost = _commercial_availability_boost(compound.get('synonyms', []))
+        commercial_evidence = _commercial_text_evidence(compound)
+        commercial_boost = commercial_evidence['score']
         prevalence_score = max(0.0, min(1.0, base_prevalence_score + commercial_boost))
         marker_info = _collect_reference_markers(compound)
 
@@ -782,12 +737,22 @@ def _rank_compounds(compounds: List[Any], ion_mode: str = 'both', strict_filter:
             prevalence_score * weights['prevalence']
         )
 
-        compound['public_record_count'] = len(compound.get('synonyms', [])) if isinstance(compound.get('synonyms', []), list) else 0
+        compound['public_record_count'] = len(_distinct_synonyms(compound.get('synonyms', [])))
+        compound['ranking_model'] = RANKING_MODEL
+        compound['score_weights'] = dict(weights)
+        compound['ranking_evidence'] = {
+            'unique_synonym_count': compound['public_record_count'],
+            'commercial_matches': commercial_evidence['matches'],
+            'market_availability': 'unverified',
+            'synonyms_complete': compound.get('synonyms_complete'),
+            'properties_complete': compound.get('properties_complete'),
+        }
         compound['reference_markers'] = marker_info
         compound['score_breakdown'] = {
             'ionization_likelihood': round(ion_score, 4),
             'record_quality': round(quality_score, 4),
             'prevalence': round(prevalence_score, 4),
+            'annotation_support': round(base_prevalence_score, 4),
             'commercial_availability': round(commercial_boost, 4),
         }
         compound['final_score'] = round(final_score * 100.0, 2)
@@ -1142,8 +1107,8 @@ def _build_pubchem_compounds_from_cids(
                         'CID': cid,
                         'Title': item.get('Title'),
                         'IUPACName': item.get('IUPACName'),
-                        'IsomericSMILES': item.get('IsomericSMILES'),
-                        'CanonicalSMILES': item.get('CanonicalSMILES'),
+                        'IsomericSMILES': item.get('IsomericSMILES') or item.get('SMILES'),
+                        'CanonicalSMILES': item.get('CanonicalSMILES') or item.get('ConnectivitySMILES'),
                         'InChI': item.get('InChI'),
                         'InChIKey': item.get('InChIKey'),
                         'MolecularWeight': item.get('MolecularWeight'),

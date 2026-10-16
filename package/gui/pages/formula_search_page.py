@@ -1546,7 +1546,7 @@ class FormulaSearchPage(BasePage):
         cid = item.get("cid") or "N/A"
         title = item.get("title") or "N/A"
         iupac_name = item.get("iupac_name") or "N/A"
-        smiles = item.get("canonical_smiles") or item.get("isomeric_smiles") or ""
+        smiles = item.get("isomeric_smiles") or item.get("canonical_smiles") or ""
         mw = item.get("molecular_weight") or "N/A"
         mono = item.get("monoisotopic_mass") or "N/A"
         inchi = item.get("inchi") or "N/A"
@@ -1568,6 +1568,8 @@ class FormulaSearchPage(BasePage):
         quality_score = score_breakdown.get("record_quality")
         prevalence_score = score_breakdown.get("prevalence")
         synonym_count = len(synonyms) if isinstance(synonyms, list) else 0
+        ranking_evidence = item.get("ranking_evidence") or {}
+        score_weights = item.get("score_weights") or {}
         cas_text = "N/A"
         if cas_numbers:
             cas_text = " / ".join(cas_numbers[:3])
@@ -1594,7 +1596,11 @@ class FormulaSearchPage(BasePage):
             f"CAS: {cas_text}",
             f"Title: {title}",
             f"IUPAC Name: {iupac_name}",
-            f"Synonym Count: {synonym_count}",
+            f"Synonym Count (not source count): {synonym_count}",
+            f"Unique Name Count: {ranking_evidence.get('unique_synonym_count', 'N/A')}",
+            f"Ranking Model: {item.get('ranking_model') or 'legacy / unrecorded'}",
+            "Commercial text clues only; market availability and usage frequency unverified.",
+            f"Synonyms Completeness: {item.get('synonyms_complete')}",
             f"Monoisotopic Mass: {mono}",
             f"Molecular Weight: {mw}",
             f"XLogP: {_fmt_metric(xlogp)}",
@@ -1602,9 +1608,13 @@ class FormulaSearchPage(BasePage):
             f"H-Bond Donor Count: {_fmt_metric(hbd)}",
             f"H-Bond Acceptor Count: {_fmt_metric(hba)}",
             f"Charge: {_fmt_metric(charge)}",
-            f"Score Breakdown (public records/quality/ionization): {_fmt_metric(prevalence_score)}/{_fmt_metric(quality_score)}/{_fmt_metric(ion_score)}",
+            f"Score Breakdown (prior/field completeness/ion indicator): {_fmt_metric(prevalence_score)}/{_fmt_metric(quality_score)}/{_fmt_metric(ion_score)}",
         ])
 
+        lines.append(f"Annotation / Commercial Text: {_fmt_metric(score_breakdown.get('annotation_support'))}/{_fmt_metric(score_breakdown.get('commercial_availability'))}")
+        lines.append(f"Weights (prior/field/ion): {score_weights.get('prevalence', 'N/A')}/{score_weights.get('record_quality', 'N/A')}/{score_weights.get('ionization_likelihood', 'N/A')}")
+        for match in ranking_evidence.get('commercial_matches', []):
+            lines.append(f"Text clue [{match.get('field')}]: {match.get('text')}")
         self.result_text.config(state=tk.NORMAL)
         self.result_text.delete('1.0', tk.END)
         self.result_text.insert(tk.END, "\n".join(lines))
