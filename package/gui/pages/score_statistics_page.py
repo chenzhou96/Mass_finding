@@ -15,7 +15,6 @@ from ...config.AppUI_config import AppUIConfig
 from ...config.event_config import EventType, EventPriority
 from ...config.base_config import BaseConfig
 from ...config.path_config import PathManager
-from ...service.formula_search_service import rerank_cached_compounds
 
 
 class ScoreStatisticsPage(BasePage):
@@ -194,9 +193,11 @@ class ScoreStatisticsPage(BasePage):
         self.compound_listbox.delete(0, tk.END)
         self._clear_structure()
 
+        unavailable = []
         for formula in self.formula_list:
             compounds = self._load_compounds(formula)
             if compounds is None:
+                unavailable.append(formula)
                 continue
             total = len(compounds)
             above = [c for c in compounds if c.get("final_score", 0) >= self.current_threshold]
@@ -207,6 +208,10 @@ class ScoreStatisticsPage(BasePage):
 
         self._refresh_tree()
         self._update_summary()
+        if unavailable:
+            messagebox.showwarning("部分缓存未统计",
+                "以下分子式的缓存缺失、损坏或缺少有效保存分数，未纳入统计：\n"
+                + "、".join(unavailable) + "\n请检查缓存，或明确执行原始缓存重建；未自动重算或补零。")
 
     def _load_compounds(self, formula):
         cache_file = self.path_manager.get_formula_search_cache_path() / f"formula_search_results_{formula}.json"
@@ -216,10 +221,16 @@ class ScoreStatisticsPage(BasePage):
         try:
             with open(cache_file, "r", encoding="utf-8") as f:
                 payload = json.load(f)
-            if isinstance(payload, dict):
-                raw = payload.get("results", [])
-                return rerank_cached_compounds(raw, ion_mode="both", strict_filter=True)
-            return []
+            if (not isinstance(payload, dict) or not isinstance(payload.get("results"), list)
+                    or any(not isinstance(row, dict) for row in payload["results"])):
+                raise ValueError("缓存须包含 results 对象列表")
+            rows = payload["results"]
+            for row in rows:
+                score = row.get("final_score")
+                if (isinstance(score, bool) or not isinstance(score, (int, float))
+                        or not math.isfinite(score) or not 0 <= score <= 100):
+                    raise ValueError("缓存缺少有效保存分数；请明确重建，不能自动重算或补零")
+            return rows
         except Exception as ex:
             logging.warning(f"读取缓存失败({formula}): {ex}")
             return None

@@ -16,7 +16,7 @@ from ...config.event_config import EventType, EventPriority
 from ...config.base_config import BaseConfig
 from ...config.path_config import PathManager
 from ...core.thread_pool import ThreadPool
-from ...service.formulaSearch import start_search, rerank_cached_compounds
+from ...service.formulaSearch import start_search
 from ...service.cache_index_service import sync_formula_index_cache
 
 
@@ -1273,9 +1273,11 @@ class FormulaSearchPage(BasePage):
             with open(cache_file, 'r', encoding='utf-8') as f:
                 payload = json.load(f)
 
-            if isinstance(payload, dict):
-                raw_results = payload.get('results', [])
-                payload['results'] = rerank_cached_compounds(raw_results, ion_mode='both', strict_filter=True)
+            if (not isinstance(payload, dict) or not isinstance(payload.get('results'), list)
+                    or any(not isinstance(row, dict) for row in payload['results'])):
+                raise ValueError('缓存须包含 results 对象列表')
+            # Opening a result is not a request to recompute its saved model or ion mode.
+            # Explicit raw-cache rebuilding remains the path for new scores.
             return payload
         except Exception as ex:
             logging.warning(f"读取本地缓存失败({formula}): {ex}")
