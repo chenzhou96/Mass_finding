@@ -268,12 +268,17 @@ class ScoreStatisticsPage(BasePage):
         self._show_compounds_for_formula(formula)
 
     def _show_compounds_for_formula(self, formula):
+        # Selection owns both the visible preview and its double-click target.
+        # An empty/unavailable formula must not inherit another formula's image.
+        self._current_compounds = []
+        self.compound_listbox.delete(0, tk.END)
+        self._clear_structure()
         data = self.statistics_data.get(formula)
         if not data:
+            self.structure_label.config(text="当前分子式没有可用统计结果\n请重新执行统计")
             return
         compounds = data.get("compounds", [])
         self._current_compounds = compounds
-        self.compound_listbox.delete(0, tk.END)
         for i, c in enumerate(compounds):
             cid = c.get("cid", "?")
             name = (c.get("title") or c.get("iupac_name") or "N/A")
@@ -283,6 +288,8 @@ class ScoreStatisticsPage(BasePage):
         if compounds:
             self.compound_listbox.selection_set(0)
             self._render_compound_structure(compounds[0])
+        else:
+            self.structure_label.config(text="当前分子式没有达到阈值的候选\n无可预览结构")
 
     def _on_compound_select(self, _event=None):
         selected = self.compound_listbox.curselection()
