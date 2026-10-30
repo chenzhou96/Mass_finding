@@ -152,6 +152,53 @@ class _FakeEvent:
 
 
 class UiBehaviorTests(unittest.TestCase):
+    def test_statistics_tree_selection_clears_real_tk_preview_and_recovers(self):
+        import tkinter as tk
+        from tkinter import ttk
+        from package.gui.pages.score_statistics_page import ScoreStatisticsPage
+
+        root = tk.Tk()
+        references = self._track_tk_fixture(root)
+        try:
+            root.withdraw()
+            page = ScoreStatisticsPage.__new__(ScoreStatisticsPage)
+            references.append(weakref.ref(page))
+            compound = {"cid": 1, "title": "Synthetic", "final_score": 90}
+            page.statistics_data = {"CH4": {"compounds": [compound]}, "H2O": {"compounds": []}}
+            page._current_compounds = []
+            page._structure_photo = None
+            page._structure_image_path = None
+            page.compound_listbox = tk.Listbox(root, exportselection=False)
+            page.structure_label = tk.Label(root)
+            page.tree = ttk.Treeview(root, columns=("formula",), show="headings")
+            page.tree.bind("<<TreeviewSelect>>", page._on_table_row_select)
+            rows = {formula: page.tree.insert("", tk.END, values=(formula,))
+                    for formula in ("CH4", "H2O", "MISSING")}
+
+            def render(_compound):
+                page._structure_photo = tk.PhotoImage(master=root, width=4, height=4)
+                page._structure_image_path = Path("synthetic-preview.png")
+                page.structure_label.config(image=page._structure_photo, text="")
+
+            page._render_compound_structure = render
+            for formula in ("CH4", "H2O", "H2O", "CH4", "MISSING"):
+                page.tree.selection_set(rows[formula])
+                root.update()
+                if formula == "CH4":
+                    self.assertEqual(page.compound_listbox.size(), 1)
+                    self.assertTrue(page.structure_label.cget("image"))
+                    self.assertEqual(page._structure_image_path, Path("synthetic-preview.png"))
+                else:
+                    self.assertEqual(page.compound_listbox.size(), 0)
+                    self.assertEqual(page._current_compounds, [])
+                    self.assertEqual(page.structure_label.cget("image"), "")
+                    self.assertTrue(page.structure_label.cget("text"))
+                    self.assertIsNone(page._structure_photo)
+                    self.assertIsNone(page._structure_image_path)
+            self.assertEqual(page.statistics_data["CH4"]["compounds"], [compound])
+        finally:
+            root.destroy()
+
     def _track_tk_fixture(self, root):
         references = [weakref.ref(root)]
         self.addCleanup(self._release_tk_fixture, threading.get_ident(), references)
